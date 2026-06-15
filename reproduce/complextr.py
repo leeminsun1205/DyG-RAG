@@ -142,6 +142,7 @@ def _build_async_client() -> AsyncOpenAI:
 
 async def _chat_completion(model: str, messages: list[dict[str, str]], **kwargs) -> str:
     client = _build_async_client()
+    kwargs.setdefault("temperature", 0)  # match HippoRAG (temp=0) for a fair + reproducible comparison
     response = await client.chat.completions.create(model=model, messages=messages, **kwargs)
     return response.choices[0].message.content
 
