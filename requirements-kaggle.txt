@@ -1,0 +1,34 @@
+# Minimal, Kaggle-compatible deps for running DyG-RAG (reproduce/complextr.py)
+# with OpenAI API LLM (e.g. gpt-4.1-nano) + local BGE-M3 embedding.
+#
+# Tested on Kaggle base image: Python 3.10, torch 2.0.0 (pre-installed).
+# DO NOT install the full requirements.txt on Kaggle: it pins umap==0.1.1
+# (broken on py3.10) and pulls vllm/faiss-gpu/colbert/llama-index/etc. that
+# DyG-RAG never imports.
+#
+# Usage on Kaggle (GPU on):
+#   !pip install -q -r requirements-kaggle.txt
+#   # then RESTART the kernel before importing anything.
+#
+# torch / numpy / pandas / tqdm are already on the Kaggle image -> not pinned
+# here to avoid disturbing the CUDA build.
+
+# LLM + embedding/rerank/NER stack (pinned to versions that work with torch 2.0.0)
+openai>=1.30
+transformers==4.44.2
+sentence-transformers==3.0.1
+tokenizers<0.20
+
+# graphrag runtime deps
+nano-vectordb==0.0.4.3
+aioboto3          # imported by graphrag/_llm.py
+tenacity
+tiktoken
+networkx
+xxhash
+python-dateutil
+
+# imported unconditionally by graphrag/_storage/__init__.py
+# (we use NanoVectorDB + NetworkX, but these must import successfully)
+neo4j
+hnswlib
