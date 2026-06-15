@@ -163,7 +163,7 @@ class Evaluator:
         res_dict['avg_query_time'] = avg_query_time
         
         # Save evaluation results
-        output_eval_file = results_file.replace('.json', '_eval.json')
+        output_eval_file = str(results_file).replace('.json', '_eval.json')
         
         # Merge metadata and evaluation results - only save ACC and F1
         eval_data = {

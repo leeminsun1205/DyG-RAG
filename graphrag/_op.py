@@ -814,9 +814,9 @@ async def _merge_events_then_upsert(
 
     already_event = await dyg_inst.get_node(event_id)
     if already_event is not None:
-        already_timestamps.append(already_event.get("timestamp", ""))
-        already_sentences.append(already_event.get("sentence", ""))
-        already_contexts.append(already_event.get("context", ""))
+        already_timestamps.append(already_event.get("timestamp") or "")
+        already_sentences.append(already_event.get("sentence") or "")
+        already_contexts.append(already_event.get("context") or "")
         already_source_ids.extend(
             split_string_by_multi_markers(already_event.get("source_id", ""), [GRAPH_FIELD_SEP])
         )
@@ -826,13 +826,13 @@ async def _merge_events_then_upsert(
         elif isinstance(existing_entities, str):
             already_entities_involved.extend(existing_entities.split(",") if existing_entities else [])
 
-    timestamps = [dp.get("timestamp", "") for dp in events_data] + already_timestamps
+    timestamps = [(dp.get("timestamp") or "") for dp in events_data] + already_timestamps
     timestamp = sorted(Counter(timestamps).items(), key=lambda x: x[1], reverse=True)[0][0] if timestamps else ""
-    
-    sentences = [dp.get("sentence", "") for dp in events_data] + already_sentences
+
+    sentences = [(dp.get("sentence") or "") for dp in events_data] + already_sentences
     sentence = max(sentences, key=len) if sentences else ""
-    
-    contexts = [dp.get("context", "") for dp in events_data] + already_contexts
+
+    contexts = [(dp.get("context") or "") for dp in events_data] + already_contexts
     context = max(contexts, key=len) if contexts else ""
     
     all_entities_involved = []
