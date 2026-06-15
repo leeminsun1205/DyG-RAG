@@ -584,7 +584,7 @@ async def extract_events(
                         continue
 
                     context = event.get('context', '')
-                    if context and not isinstance(context, str):
+                    if not isinstance(context, str):   # coerce None / non-str (e.g. LLM emits "context": null)
                         context = ''
                     
                     raw_time = event.get('time', 'static')
