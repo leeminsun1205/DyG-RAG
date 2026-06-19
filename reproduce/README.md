@@ -8,9 +8,10 @@ The evaluation pipeline processes temporal QA tasks using DyG-RAG. The system bu
 
 ## Files
 
-- `timeqa.py` - Main evaluation script for TimeQA dataset
-- `tempreason.py` - Main evaluation script for TempReason dataset
-- `complextr.py` - Main evaluation script for Complex-TR dataset
+- `run.py` - Single parameterized evaluation driver for all three datasets.
+  Select the benchmark with `--dataset {complextr,timeqa,tempreason}`.
+  (Replaces the old per-dataset `timeqa.py` / `tempreason.py` / `complextr.py`,
+  which were identical apart from the dataset path.)
 
 ## Datasets
 
@@ -54,21 +55,26 @@ The datasets have been carefully curated and processed for optimal performance:
 
 ## Quick Start
 
-1. **Configure environment:**
+1. **Configure environment (OpenAI API path):**
 
    ```bash
-   # Set environment variables (or provide interactively)
-   export VLLM_BASE_URL="http://127.0.0.1:8000/v1"
-   export QWEN_BEST="qwen-14b" 
-   export LOCAL_BGE_PATH="/path/to/your/bge-m3-model"
+   export OPENAI_API_KEY="sk-..."        # real key; or "EMPTY" for a local vLLM
+   export LLM_MODEL="gpt-4.1-nano"       # any OpenAI chat model (or local model name)
+   # export OPENAI_BASE_URL="https://..." # optional: vLLM / proxy; unset = api.openai.com
+   export LOCAL_BGE_PATH="BAAI/bge-m3"   # BGE-M3 path or HF id (auto-downloads on GPU)
    ```
-2. **Run evaluation:**
+
+   Legacy local-vLLM names still work as fallbacks: `VLLM_BASE_URL` (→ base_url) and `QWEN_BEST` (→ model).
+2. **Run evaluation** (from the repository root):
 
    ```bash
-   python timeqa.py
+   python reproduce/run.py --dataset timeqa        # or complextr / tempreason
+   # quick smoke test: add --max_questions 20
    ```
 3. **Check results:**
-   Results are saved to `results_mode-dynamic_topk-20.json`
+   Results are saved to `results_{dataset}_mode-{mode}_topk-{top_k}.json`
+   (e.g. `results_timeqa_mode-dynamic_topk-20.json`), and the run prints
+   `Accuracy / Recall / F1 / EM` at the end.
 
 ## Configuration Options
 

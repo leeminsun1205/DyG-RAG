@@ -21,8 +21,8 @@ Distinguishes what **exists in the code today** from what is a **research goal**
 **Implemented (present today):**
 
 - **Full DyG-RAG pipeline** (upstream): `GraphRAG.insert()` (chunk → LLM event extraction → NER → event merge → event-graph edge building → persist) and `GraphRAG.query(mode="dynamic")` (timestamp-weighted vector search → cross-encoder rerank → weighted random walk → Time-CoT generation). `"dynamic"` is the **only** implemented query mode.
-- **Reproduction scripts** for three temporal-QA datasets: `reproduce/{timeqa,tempreason,complextr}.py`. Each builds the graph, runs the QA loop with concurrency + retries, saves `results_mode-dynamic_topk-20.json`, then calls `graphrag.evaluate.run_evaluation`.
-- **OpenAI-API adaptation of all three reproduce scripts (ours).** `complextr.py`, `timeqa.py`, and `tempreason.py` have been modified to run the LLM through the OpenAI API (or any OpenAI-compatible endpoint) instead of a local vLLM server, configurable by env var: `LLM_MODEL` (default `gpt-4.1-nano`), `OPENAI_BASE_URL` (unset = official OpenAI; set = vLLM/proxy), `OPENAI_API_KEY`, `LOCAL_BGE_PATH` (default `BAAI/bge-m3`, auto-downloads). All three force `temperature=0` for reproducibility. Embedding stays **BGE-M3 local** and reranker/NER stay as in the paper — only the LLM backend changed. The legacy env names (`VLLM_BASE_URL`, `QWEN_BEST`) are still accepted as fallbacks, so the local-vLLM path keeps working without edits.
+- **Single reproduction driver** for all three temporal-QA datasets: `reproduce/run.py --dataset {complextr,timeqa,tempreason}`. It builds the graph, runs the QA loop with concurrency + retries, saves `results_{dataset}_mode-{mode}_topk-{top_k}.json`, then calls `graphrag.evaluate.run_evaluation` and prints Accuracy/Recall/F1/EM. (The three datasets used identical config + pipeline and differed only in dataset path, so the old per-dataset `complextr.py`/`timeqa.py`/`tempreason.py` were unified into this one file.)
+- **OpenAI-API adaptation (ours).** `run.py` runs the LLM through the OpenAI API (or any OpenAI-compatible endpoint) instead of a local vLLM server, configurable by env var: `LLM_MODEL` (default `gpt-4.1-nano`), `OPENAI_BASE_URL` (unset = official OpenAI; set = vLLM/proxy), `OPENAI_API_KEY`, `LOCAL_BGE_PATH` (default `BAAI/bge-m3`, auto-downloads). It forces `temperature=0` for reproducibility. Embedding stays **BGE-M3 local** and reranker/NER stay as in the paper — only the LLM backend changed. The legacy env names (`VLLM_BASE_URL`, `QWEN_BEST`) are still accepted as fallbacks, so the local-vLLM path keeps working without edits. A `--max_questions N` flag limits the run for quick smoke tests.
 - **Reproduced ComplexTR baseline (ours), matches the paper.** `gpt-4.1-nano` + BGE-M3 on ComplexTR gave **Accuracy 54.41 / Recall 69.43**, against the paper's Qwen2.5-14B **55.62 / 69.88** — within ~1pp despite the different LLM. The paper's headline metrics are **Accuracy (inclusion) and Recall only**; `evaluate.py` also prints F1/precision/EM but those are near-zero here **by design** (the `dynamic_QA` prompt asks for a verbose answer + justification, so token-precision/EM collapse — not a bug, not comparable to the paper).
 - **Bug fixes (ours, in repo code — keep them):**
   - `graphrag/_op.py`: event `context` is coerced to `""` when the LLM emits `"context": null` (lines ~586 and the `_merge_events_then_upsert` lists ~835). Without this, `max(contexts, key=len)` does `len(None)` and the whole insert crashes. Surfaced by gpt-4.1-nano (Qwen rarely emitted null); latent for any model.
@@ -104,14 +104,15 @@ Run scripts **from the repository root**. The reproduce scripts use relative pat
    datasets/{TimeQA,TempReason,ComplexTR}/{Corpus,Question}.json
    ```
 
-### Any dataset via OpenAI API (the adapted path — all three scripts)
+### Any dataset via OpenAI API (the adapted path)
 
 ```sh
 export OPENAI_API_KEY="sk-..."          # real key; or "EMPTY" for a local vLLM
 export LLM_MODEL="gpt-4.1-nano"         # any OpenAI chat model (or local model name)
 # export OPENAI_BASE_URL="https://..."  # optional: vLLM / proxy endpoint; unset = api.openai.com
 export LOCAL_BGE_PATH="BAAI/bge-m3"     # BGE-M3 path or HF id (auto-downloads on GPU)
-python reproduce/complextr.py           # or reproduce/timeqa.py / reproduce/tempreason.py
+python reproduce/run.py --dataset complextr      # or timeqa / tempreason
+python reproduce/run.py --dataset timeqa --max_questions 20   # quick smoke test
 ```
 
 ### Legacy local-vLLM path (still supported via fallback env names)
@@ -120,7 +121,7 @@ python reproduce/complextr.py           # or reproduce/timeqa.py / reproduce/tem
 export VLLM_BASE_URL="http://127.0.0.1:8000/v1"   # → used as base_url; api_key defaults to "EMPTY"
 export QWEN_BEST="qwen-14b"                        # → used as LLM_MODEL
 export LOCAL_BGE_PATH="/path/to/bge-m3"
-python reproduce/timeqa.py        # or complextr.py / tempreason.py
+python reproduce/run.py --dataset timeqa
 ```
 
 ### Minimal examples (single query on `demo/Corpus.json`)
@@ -132,8 +133,8 @@ python examples/local_BGE_local_LLM.py   # BGE-M3 embeddings + local vLLM LLM
 
 Notes:
 
-- Each reproduce script prints progress and ends with `Evaluation completed! F1: .. , ACC: ..` and writes `results_mode-dynamic_topk-20.json` (+ `..._eval.json`).
-- `QUERY_MODE="dynamic"`, `QUERY_TOP_K=20`, `CONCURRENCY=5` are set at the top of each reproduce script.
+- `run.py` prints progress and ends with `[<dataset>] Evaluation completed! Accuracy: .. | Recall: .. | F1: .. | EM: ..` and writes `results_{dataset}_mode-{mode}_topk-{top_k}.json` (+ `..._eval.json`).
+- Defaults: `--mode dynamic` (only mode implemented), `--top_k 20`, `--concurrency 5`, `--max_questions 0` (all). Override on the CLI.
 - The headline metrics for these datasets are **Accuracy (inclusion) and Recall**; F1/EM are printed but not paper-comparable with the verbose `dynamic_QA` prompt.
 
 ---
@@ -151,7 +152,7 @@ Each contains the LLM response cache (`kv_store_llm_response_cache.json`), full 
 To force a fully clean rebuild of one dataset:
 
 ```sh
-rm -rf complextr_dir       # then re-run reproduce/complextr.py
+rm -rf complextr_dir       # then re-run: python reproduce/run.py --dataset complextr
 ```
 
 When debugging strange retrieval results, suspect stale cache / a half-written graph from an interrupted insert.
@@ -302,7 +303,7 @@ Corpus entries: `{title, context, ...}` (the reproduce scripts build `f"Title: {
 
 ## Evaluation
 
-`graphrag/evaluate.py` (`Evaluator`, `run_evaluation`) reads `results_mode-dynamic_topk-20.json`, evaluates only `status=="success"` rows, writes `..._eval.json`, and returns `{accuracy, f1, precision, recall, em, avg_query_time}`.
+`graphrag/evaluate.py` (`Evaluator`, `run_evaluation`) reads a results JSON (e.g. `results_complextr_mode-dynamic_topk-20.json`), evaluates only `status=="success"` rows, writes `..._eval.json`, and returns `{accuracy, f1, precision, recall, em, avg_query_time}`. Run standalone with `python graphrag/evaluate.py --results-file <file>`.
 
 - `normalize_answer`: lowercase, strip punctuation + articles, collapse whitespace.
 - **Accuracy** = inclusion (normalized gold is a substring of the prediction). **This is the paper's headline metric**, together with **Recall** (token overlap). For multi-answer items, accuracy requires *all* golds covered.
@@ -359,7 +360,7 @@ Local use: read code, small debugging, syntax checks, tiny indexing/retrieval. L
    os.environ["OPENAI_API_KEY"] = UserSecretsClient().get_secret("OPENAI_API_KEY")
    ```
 3. `python models/download.py` **after** deps are installed (cross-encoder needs `sentence-transformers`; if it 's still missing, `CrossEncoder("cross-encoder/ms-marco-TinyBERT-L-2-v2").save("models/cross-encoder_ms-marco-TinyBERT-L-2-v2")`).
-4. Run from the repo root: `python reproduce/complextr.py`.
+4. Run from the repo root: `python reproduce/run.py --dataset complextr`.
 
 Common failure modes (and where they come from): missing `accelerate` → BGE-M3 load fails; newer `transformers` → "PyTorch ≥ 2.4 required" disables torch; broken notebook-kernel imports (`typing_extensions`) → run eval via `!python -c "..."` subprocess instead of the kernel.
 
