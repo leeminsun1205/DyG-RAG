@@ -47,105 +47,52 @@ def test_cross_encoder_model(model_path):
         logger.warning("Model downloaded but functionality test failed")
 
 def download_cross_encoder_model():
-    """Download Cross-Encoder model with retry mechanism and functionality verification"""
+    """Download Cross-Encoder model with retry mechanism and functionality verification.
+
+    Downloads directly into the HuggingFace cache and writes a self-contained
+    copy to the local path (same approach as a plain
+    `CrossEncoder(name).save(path)`), which is the reliable path on Kaggle.
+    The previous temp-dir + cache_folder dance failed silently there.
+    """
     try:
         from sentence_transformers import CrossEncoder
-        import time
-        import shutil
-        import tempfile
-        import os
-        
-        model_name = "cross-encoder/ms-marco-TinyBERT-L-2-v2"
-        script_dir = get_script_directory()
-        local_path = script_dir / model_name.replace("/", "_")
-        temp_dir = None
-        
-        logger.info(f"Downloading Cross-Encoder model: {model_name}")
-        logger.info(f"Local path: {local_path}")
-        
-        # Backup existing model if it exists
-        if local_path.exists():
-            backup_path = str(local_path) + f"_backup_{int(time.time())}"
-            shutil.move(str(local_path), backup_path)
-            logger.info(f"Backed up existing model to: {backup_path}")
-        
-        # Download with retry mechanism
-        max_retries = 3
-        success = False
-        model = None
-        
-        for attempt in range(max_retries):
-            logger.info(f"Download attempt {attempt + 1}/{max_retries}")
-            
-            try:
-                # Create temporary directory for this attempt
-                temp_dir = tempfile.mkdtemp(prefix="cross_encoder_download_")
-                
-                # Download model to temporary location first
-                logger.info("Downloading Cross-Encoder model...")
-                model = CrossEncoder(model_name, cache_folder=temp_dir)
-                
-                success = True
-                logger.info("Download completed successfully")
-                break
-                
-            except Exception as e:
-                logger.warning(f"Attempt {attempt + 1} failed: {e}")
-                
-                # Clean up failed attempt
-                if temp_dir and os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir)
-                    temp_dir = None
-                
-                if "IncompleteRead" in str(e) or "Connection broken" in str(e):
-                    logger.info("Network connection interrupted, retrying...")
-                    time.sleep(5)  # Wait 5 seconds before retry
-                elif "timeout" in str(e).lower():
-                    logger.info("Download timeout, retrying...")
-                    time.sleep(10)  # Wait longer for timeout
-                elif "HTTPError" in str(e) or "ConnectionError" in str(e):
-                    logger.info("HTTP/Connection error, retrying...")
-                    time.sleep(3)
-                else:
-                    logger.info(f"Other error, retrying...")
-                    time.sleep(3)
-                
-                if attempt == max_retries - 1:
-                    logger.error(f"All {max_retries} attempts failed")
-                    raise
-        
-        if not success or model is None:
-            raise Exception("Failed to download model after all retries")
-        
-        # Create final local directory
-        local_path.mkdir(parents=True, exist_ok=True)
-        
-        # Save model to final location
-        logger.info("Saving model to final location...")
-        model.save(str(local_path))
-        
-        # Clean up temporary directory
-        if temp_dir and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-        
-        # Verify functionality
-        test_cross_encoder_model(str(local_path))
-        
-        logger.info(f"Cross-Encoder model downloaded successfully to {local_path}")
-        return True
-        
     except ImportError:
         logger.error("sentence-transformers not installed. Please install it first:")
         logger.error("pip install sentence-transformers")
         return False
-    except Exception as e:
-        logger.error(f"Failed to download Cross-Encoder model: {e}")
-        
-        # Clean up on failure
-        if 'temp_dir' in locals() and temp_dir and os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
-        
-        return False
+
+    import time
+
+    model_name = "cross-encoder/ms-marco-TinyBERT-L-2-v2"
+    script_dir = get_script_directory()
+    local_path = script_dir / model_name.replace("/", "_")
+
+    logger.info(f"Downloading Cross-Encoder model: {model_name}")
+    logger.info(f"Local path: {local_path}")
+
+    # Skip if a valid copy is already present.
+    if (local_path / "config.json").exists():
+        logger.info("Cross-Encoder already present locally, skipping download.")
+        test_cross_encoder_model(str(local_path))
+        return True
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        logger.info(f"Download attempt {attempt + 1}/{max_retries}")
+        try:
+            model = CrossEncoder(model_name)            # downloads from HuggingFace
+            local_path.mkdir(parents=True, exist_ok=True)
+            model.save(str(local_path))                 # self-contained local copy
+            test_cross_encoder_model(str(local_path))   # functionality check
+            logger.info(f"Cross-Encoder model downloaded successfully to {local_path}")
+            return True
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(5)
+
+    logger.error(f"Failed to download Cross-Encoder model after {max_retries} attempts")
+    return False
 
 def download_ner_model():
     """Download NER model with retry mechanism and functionality verification"""
