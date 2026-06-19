@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import warnings
+# Silence two harmless third-party warnings printed before/while loading models:
+warnings.filterwarnings("ignore", message="A NumPy version")            # scipy vs numpy 1.23.5
+warnings.filterwarnings("ignore", message="TypedStorage is deprecated")  # torch loading BGE-M3
+
 import os, sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
