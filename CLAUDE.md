@@ -133,7 +133,7 @@ python examples/local_BGE_local_LLM.py   # BGE-M3 embeddings + local vLLM LLM
 
 Notes:
 
-- `run.py` prints progress and ends with `[<dataset>] Evaluation completed! Accuracy: .. | Recall: .. | F1: .. | EM: ..` and writes `results_{dataset}_mode-{mode}_topk-{top_k}.json` (+ `..._eval.json`).
+- `run.py` prints progress and ends with a formatted metrics block (Accuracy, Recall, Precision, F1, EM, Avg query time — all 2-decimal) and writes `results_{dataset}_mode-{mode}_topk-{top_k}.json` (+ `..._eval.json`).
 - Defaults: `--mode dynamic` (only mode implemented), `--top_k 20`, `--concurrency 5`, `--max_questions 0` (all). Override on the CLI.
 - The headline metrics for these datasets are **Accuracy (inclusion) and Recall**; F1/EM are printed but not paper-comparable with the verbose `dynamic_QA` prompt.
 

@@ -457,12 +457,18 @@ def main():
         logger.info("Starting query result evaluation...")
         m = run_evaluation(results_file)
         if m:
-            # Paper headline metrics = Accuracy + Recall; F1/EM printed for rigor.
-            logger.info(
-                f"[{label}] Evaluation completed! "
-                f"Accuracy: {m['accuracy']:.2f} | Recall: {m['recall']:.2f} | "
-                f"F1: {m['f1']:.2f} | EM: {m['em']:.2f}"
-            )
+            # Paper headline metrics = Accuracy + Recall; the rest printed for rigor.
+            line = "=" * 44
+            print("\n" + line)
+            print(f"  Evaluation — {label}")
+            print(line)
+            print(f"  Accuracy       : {m.get('accuracy', 0):.2f}")
+            print(f"  Recall         : {m.get('recall', 0):.2f}")
+            print(f"  Precision      : {m.get('precision', 0):.2f}")
+            print(f"  F1             : {m.get('f1', 0):.2f}")
+            print(f"  EM             : {m.get('em', 0):.2f}")
+            print(f"  Avg query time : {m.get('avg_query_time', 0):.2f} s")
+            print(line + "\n")
     except ImportError:
         logger.warning("Evaluation module not imported; run graphrag/evaluate.py separately.")
     except Exception as e:
