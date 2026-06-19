@@ -44,43 +44,37 @@ logging.getLogger("DyG-RAG").setLevel(logging.INFO)
 ################################################################################
 # 0. Configuration
 ################################################################################
-def get_config_value(env_name: str, description: str, example: str = None) -> str:
-    """Get configuration value from environment variable or user input."""
-    value = os.getenv(env_name)
-    if value:
-        return value
-    
-    print(f"\n⚠️  Missing configuration: {env_name}")
-    print(f"Description: {description}")
-    if example:
-        print(f"Example: {example}")
-    
-    while True:
-        user_input = input(f"Please enter {env_name}: ").strip()
-        if user_input:
-            return user_input
-        print("❌ Value cannot be empty. Please try again.")
+# This reproduces the paper's TimeQA setup, with ONE intentional change:
+# the LLM can be served via the OpenAI API instead of a local vLLM server.
+# Everything else stays faithful to the paper:
+#   - Embedding : BGE-M3 (local, GPU)              -- as in the paper
+#   - Reranker  : cross-encoder TinyBERT-L-2-v2
+#   - NER       : dslim/bert-base-NER
+#
+# Configure via environment variables:
+#   export OPENAI_API_KEY="sk-..."        # real key (Kaggle secret); "EMPTY" for vLLM
+#   export LLM_MODEL="gpt-4.1-nano"       # any OpenAI chat model (or local model name)
+#   export OPENAI_BASE_URL="..."          # optional; unset = api.openai.com (set for vLLM)
+#   export LOCAL_BGE_PATH="BAAI/bge-m3"   # BGE-M3 local path or HF id (auto-downloads)
 
 print("🔧 Checking configuration...")
-VLLM_BASE_URL = get_config_value(
-    "VLLM_BASE_URL", 
-    "Base URL for VLLM API service", 
-    "http://127.0.0.1:8000/v1"
-)
 
-BEST_MODEL_NAME = get_config_value(
-    "QWEN_BEST", 
-    "Model name for the best/primary LLM", 
-    "qwen-14b"
-)
+# --- LLM model name (accept LLM_MODEL, fall back to legacy QWEN_BEST) ---------
+BEST_MODEL_NAME = os.getenv("LLM_MODEL") or os.getenv("QWEN_BEST") or "gpt-4.1-nano"
 
-LOCAL_BGE_PATH = get_config_value(
-    "LOCAL_BGE_PATH", 
-    "Local path to BGE embedding model", 
-    "/path/to/bge-m3"
-)
+# --- Base URL: None => official OpenAI endpoint; set => custom/VLLM endpoint ---
+# Accept OPENAI_BASE_URL (preferred) or legacy VLLM_BASE_URL. Empty string => None.
+LLM_BASE_URL = os.getenv("OPENAI_BASE_URL") or os.getenv("VLLM_BASE_URL") or None
 
-OPENAI_API_KEY_FAKE = "EMPTY"
+# --- API key: real OpenAI key for the API path, or "EMPTY" for a local server -
+LLM_API_KEY = os.getenv("OPENAI_API_KEY") or "EMPTY"
+
+# --- Embedding: BGE-M3 as in the paper. Accepts a local path or a HF model id --
+LOCAL_BGE_PATH = os.getenv("LOCAL_BGE_PATH") or "BAAI/bge-m3"
+
+print(f"   LLM model      : {BEST_MODEL_NAME}")
+print(f"   LLM base_url   : {LLM_BASE_URL or 'https://api.openai.com/v1 (default)'}")
+print(f"   Embedding      : BGE-M3 @ {LOCAL_BGE_PATH}")
 
 ################################################################################
 # 1. Embedding function
@@ -143,7 +137,8 @@ def get_bge_embedding_func() -> EmbeddingFunc:
 # 2. LLM call function (with cache)
 ################################################################################
 def _build_async_client() -> AsyncOpenAI:
-    return AsyncOpenAI(api_key=OPENAI_API_KEY_FAKE, base_url=VLLM_BASE_URL)
+    # base_url=None -> official OpenAI endpoint; set -> VLLM/custom endpoint.
+    return AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
 
 async def _chat_completion(model: str, messages: list[dict[str, str]], **kwargs) -> str:
     client = _build_async_client()

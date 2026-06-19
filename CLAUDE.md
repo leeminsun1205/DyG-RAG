@@ -22,8 +22,7 @@ Distinguishes what **exists in the code today** from what is a **research goal**
 
 - **Full DyG-RAG pipeline** (upstream): `GraphRAG.insert()` (chunk → LLM event extraction → NER → event merge → event-graph edge building → persist) and `GraphRAG.query(mode="dynamic")` (timestamp-weighted vector search → cross-encoder rerank → weighted random walk → Time-CoT generation). `"dynamic"` is the **only** implemented query mode.
 - **Reproduction scripts** for three temporal-QA datasets: `reproduce/{timeqa,tempreason,complextr}.py`. Each builds the graph, runs the QA loop with concurrency + retries, saves `results_mode-dynamic_topk-20.json`, then calls `graphrag.evaluate.run_evaluation`.
-- **OpenAI-API adaptation of `complextr.py` (ours).** `complextr.py` has been modified to run the LLM through the OpenAI API (or any OpenAI-compatible endpoint) instead of a local vLLM server, configurable by env var: `LLM_MODEL` (default `gpt-4.1-nano`), `OPENAI_BASE_URL` (unset = official OpenAI; set = vLLM/proxy), `OPENAI_API_KEY`, `LOCAL_BGE_PATH` (default `BAAI/bge-m3`, auto-downloads). It forces `temperature=0` for reproducibility. Embedding stays **BGE-M3 local** and reranker/NER stay as in the paper — only the LLM backend changed.
-  - **`timeqa.py` and `tempreason.py` are NOT yet adapted** — they still use the original interactive `get_config_value` flow reading `VLLM_BASE_URL` / `QWEN_BEST` / `LOCAL_BGE_PATH` with a hardcoded `api_key="EMPTY"`, i.e. they assume a local vLLM server. Port the `complextr.py` env-var block to them if you want OpenAI there too.
+- **OpenAI-API adaptation of all three reproduce scripts (ours).** `complextr.py`, `timeqa.py`, and `tempreason.py` have been modified to run the LLM through the OpenAI API (or any OpenAI-compatible endpoint) instead of a local vLLM server, configurable by env var: `LLM_MODEL` (default `gpt-4.1-nano`), `OPENAI_BASE_URL` (unset = official OpenAI; set = vLLM/proxy), `OPENAI_API_KEY`, `LOCAL_BGE_PATH` (default `BAAI/bge-m3`, auto-downloads). All three force `temperature=0` for reproducibility. Embedding stays **BGE-M3 local** and reranker/NER stay as in the paper — only the LLM backend changed. The legacy env names (`VLLM_BASE_URL`, `QWEN_BEST`) are still accepted as fallbacks, so the local-vLLM path keeps working without edits.
 - **Reproduced ComplexTR baseline (ours), matches the paper.** `gpt-4.1-nano` + BGE-M3 on ComplexTR gave **Accuracy 54.41 / Recall 69.43**, against the paper's Qwen2.5-14B **55.62 / 69.88** — within ~1pp despite the different LLM. The paper's headline metrics are **Accuracy (inclusion) and Recall only**; `evaluate.py` also prints F1/precision/EM but those are near-zero here **by design** (the `dynamic_QA` prompt asks for a verbose answer + justification, so token-precision/EM collapse — not a bug, not comparable to the paper).
 - **Bug fixes (ours, in repo code — keep them):**
   - `graphrag/_op.py`: event `context` is coerced to `""` when the LLM emits `"context": null` (lines ~586 and the `_merge_events_then_upsert` lists ~835). Without this, `max(contexts, key=len)` does `len(None)` and the whole insert crashes. Surfaced by gpt-4.1-nano (Qwen rarely emitted null); latent for any model.
@@ -35,7 +34,6 @@ Distinguishes what **exists in the code today** from what is a **research goal**
 - **Conflict detection / `superseded` marking.** DyG-RAG models events on a timeline but does **not** detect that a newer event contradicts an older one, nor mark anything superseded. This is the central VDS research goal and must be built.
 - **Provenance / reliability-weighted scoring.** Events have a `source_id` (chunk provenance) but retrieval scoring uses only semantic + temporal signals; no reliability/source weighting.
 - **Knowledge update / version-aware retrieval & evaluation.** No synthetic "versioned fact" benchmark, no version-pick metric. The reproduction datasets test temporal QA accuracy, not knowledge-update behavior.
-- **Adapting `timeqa.py` / `tempreason.py` to OpenAI** (see above).
 
 **Maintenance rule:** When a code change implements, removes, or materially changes any feature above, update this section **in the same task** — move completed TODOs into "Implemented" and record new limitations. A stale status here is worse than none.
 
@@ -106,23 +104,23 @@ Run scripts **from the repository root**. The reproduce scripts use relative pat
    datasets/{TimeQA,TempReason,ComplexTR}/{Corpus,Question}.json
    ```
 
-### ComplexTR via OpenAI API (the adapted path)
+### Any dataset via OpenAI API (the adapted path — all three scripts)
 
 ```sh
 export OPENAI_API_KEY="sk-..."          # real key; or "EMPTY" for a local vLLM
 export LLM_MODEL="gpt-4.1-nano"         # any OpenAI chat model (or local model name)
 # export OPENAI_BASE_URL="https://..."  # optional: vLLM / proxy endpoint; unset = api.openai.com
 export LOCAL_BGE_PATH="BAAI/bge-m3"     # BGE-M3 path or HF id (auto-downloads on GPU)
-python reproduce/complextr.py
+python reproduce/complextr.py           # or reproduce/timeqa.py / reproduce/tempreason.py
 ```
 
-### TimeQA / TempReason (still local-vLLM only)
+### Legacy local-vLLM path (still supported via fallback env names)
 
 ```sh
-export VLLM_BASE_URL="http://127.0.0.1:8000/v1"   # vLLM server (api_key is hardcoded "EMPTY")
-export QWEN_BEST="qwen-14b"
+export VLLM_BASE_URL="http://127.0.0.1:8000/v1"   # → used as base_url; api_key defaults to "EMPTY"
+export QWEN_BEST="qwen-14b"                        # → used as LLM_MODEL
 export LOCAL_BGE_PATH="/path/to/bge-m3"
-python reproduce/timeqa.py        # or reproduce/tempreason.py
+python reproduce/timeqa.py        # or complextr.py / tempreason.py
 ```
 
 ### Minimal examples (single query on `demo/Corpus.json`)
