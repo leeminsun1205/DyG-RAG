@@ -1371,7 +1371,7 @@ class GraphRAG:
                 uncached_scores = []
                 for i in range(0, len(query_doc_pairs), batch_size):
                     batch_pairs = query_doc_pairs[i:i + batch_size]
-                    batch_scores = self.cross_encoder.predict(batch_pairs)
+                    batch_scores = self.cross_encoder.predict(batch_pairs, show_progress_bar=False)
                     
                     if hasattr(batch_scores, 'tolist'):
                         batch_scores = batch_scores.tolist()
