@@ -816,7 +816,7 @@ class GraphRAG:
             if self.enable_version_cot and final_results and self.if_timeline_events:
                 try:
                     from .versioning import build_version_section
-                    version_section = await build_version_section(final_results, self.best_model_func)
+                    version_section = await build_version_section(final_results, self.best_model_func, time_constraints)
                     if version_section:
                         events_section = version_section + "\n\n" + events_section
                         logger.info("version-cot: prepended version timeline to events section")
