@@ -27,8 +27,16 @@ from typing import Optional
 # overlap is legitimate and NOT a conflict.
 # Keys follow ComplexTR question types.
 # ---------------------------------------------------------------------------
-SINGLE_VALUED = {"spouse", "head coach", "chair", "owner", "position"}
-MULTI_VALUED = {"employer", "education", "political party", "team"}
+# Finding from the first real run on ComplexTR: people routinely hold several
+# positions / chairs / coaching roles AT ONCE — concurrent roles are NOT a
+# contradiction. So almost nothing is single-valued without an object scope;
+# only `spouse` is cleanly single-at-a-time. Everything else is multi-valued.
+# (Genuine version conflicts come from the injected versioned benchmark, where
+# we control the slot and insert a contradicting newer value — not from clean
+# encyclopedic ComplexTR data.)
+SINGLE_VALUED = {"spouse"}
+MULTI_VALUED = {"employer", "education", "political party", "team",
+                "position", "head coach", "chair", "owner"}
 
 
 def _norm(value: str) -> str:
@@ -93,6 +101,17 @@ class Conflict:
 def detect_conflicts(facts: list[VersionedFact]) -> list[Conflict]:
     """Find (entity, attribute) pairs whose single-valued state has overlapping,
     differing values. Marks the older fact `superseded` (kept, not deleted)."""
+    # Dedup exact-duplicate facts first (same run can emit the same tuple twice).
+    seen: set = set()
+    deduped: list[VersionedFact] = []
+    for f in facts:
+        sig = (f.key(), _norm(f.value), f.interval.lo, f.interval.hi)
+        if sig in seen:
+            continue
+        seen.add(sig)
+        deduped.append(f)
+    facts[:] = deduped  # mutate in place so caller's list reflects the dedup
+
     conflicts: list[Conflict] = []
     by_key: dict[tuple[str, str], list[int]] = defaultdict(list)
     for i, f in enumerate(facts):
@@ -145,10 +164,10 @@ if __name__ == "__main__":
         VersionedFact("Hans Kramers", "employer", "Utrecht University",          Interval(1926, 1934), "chunk-b"),
         VersionedFact("Hans Kramers", "employer", "Delft University of Technology", Interval(1931, 1952), "chunk-b"),
 
-        # Jüri Adams — political party. Suppose two sources disagree for overlapping
-        # years (a real data-conflict). Here we DO want a conflict flagged.
-        VersionedFact("Jüri Adams", "head coach", "Party A", Interval(1991, 1995), "chunk-c"),  # contrived single-valued conflict
-        VersionedFact("Jüri Adams", "head coach", "Party B", Interval(1993, 1998), "chunk-d"),
+        # Genuine single-valued conflict (e.g. an injected versioned-fact error or
+        # two sources disagreeing): two overlapping DIFFERENT spouses.
+        VersionedFact("Test Person", "spouse", "Alice", Interval(2002, 2006), "chunk-c"),
+        VersionedFact("Test Person", "spouse", "Bob",   Interval(2004, 2009), "chunk-d"),
     ]
 
     conflicts = detect_conflicts(facts)
@@ -167,4 +186,4 @@ if __name__ == "__main__":
     print()
     print(render_timeline(facts, "Hans Kramers", "employer"))
     print()
-    print(render_timeline(facts, "Jüri Adams", "head coach"))
+    print(render_timeline(facts, "Test Person", "spouse"))
