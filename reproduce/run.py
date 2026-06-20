@@ -135,13 +135,49 @@ def get_bge_embedding_func() -> EmbeddingFunc:
 ################################################################################
 # 2. LLM call function (with cache)
 ################################################################################
+# --- Rate / timeout control for the LLM endpoint ----------------------------
+# The proxy is hard-capped at LLM_RPM requests/minute. With best_model_max_async
+# concurrent callers (16) plus gleaning, the burst rate blows past that cap and
+# the proxy stalls held-over requests -> the insert freezes ("+10% then stuck").
+# We pace request *starts* to <= LLM_RPM/min and give each request a timeout +
+# retries so a stalled/429'd call recovers instead of wedging a slot forever.
+LLM_RPM = float(os.getenv("LLM_RPM") or 60)        # proxy hard cap (requests/min)
+LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT") or 120)
+_MIN_INTERVAL = 60.0 / LLM_RPM if LLM_RPM > 0 else 0.0
+
+_async_client: AsyncOpenAI | None = None
+_rate_lock = asyncio.Lock()
+_last_call_ts = 0.0
+
+async def _rate_limit() -> None:
+    """Space consecutive request starts >= _MIN_INTERVAL apart (global pacing)."""
+    global _last_call_ts
+    if _MIN_INTERVAL <= 0:
+        return
+    async with _rate_lock:
+        now = asyncio.get_event_loop().time()
+        wait = _last_call_ts + _MIN_INTERVAL - now
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_call_ts = asyncio.get_event_loop().time()
+
 def _build_async_client() -> AsyncOpenAI:
     # base_url=None -> official OpenAI endpoint; set -> VLLM/custom endpoint.
-    return AsyncOpenAI(api_key=LLM_API_KEY, base_url=LLM_BASE_URL)
+    # Reuse one client; bound each request so a stalled connection can't wedge a slot.
+    global _async_client
+    if _async_client is None:
+        _async_client = AsyncOpenAI(
+            api_key=LLM_API_KEY,
+            base_url=LLM_BASE_URL,
+            timeout=LLM_TIMEOUT,
+            max_retries=5,  # SDK backs off on 429/timeout (honors Retry-After)
+        )
+    return _async_client
 
 async def _chat_completion(model: str, messages: list[dict[str, str]], **kwargs) -> str:
     client = _build_async_client()
     kwargs.setdefault("temperature", 0)  # deterministic / reproducible (paper used vLLM default)
+    await _rate_limit()
     response = await client.chat.completions.create(model=model, messages=messages, **kwargs)
     return response.choices[0].message.content
 
