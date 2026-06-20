@@ -189,6 +189,7 @@ class GraphRAG:
 
     # Dynamic query timeline events parameter  
     if_timeline_events: bool = True  # Whether to include timeline events in dynamic query (default: True, set to False for ablation study)
+    enable_version_cot: bool = False  # (ours) prepend a conflict-aware version timeline to the answer context; default False = baseline unchanged
 
     random_seed: int = 42  # Default random seed
 
@@ -810,7 +811,18 @@ class GraphRAG:
                 )
             elif not self.if_timeline_events:
                 logger.info("Timeline events disabled for ablation study - skipping events section construction")
-            
+
+            # (ours) conflict-aware version timeline — flag-gated, baseline untouched when off
+            if self.enable_version_cot and final_results and self.if_timeline_events:
+                try:
+                    from .versioning import build_version_section
+                    version_section = await build_version_section(final_results, self.best_model_func)
+                    if version_section:
+                        events_section = version_section + "\n\n" + events_section
+                        logger.info("version-cot: prepended version timeline to events section")
+                except Exception as e:
+                    logger.error(f"version-cot failed (continuing with baseline context): {e}")
+
             chunks_section = ""
             if truncated_chunks:
                 for i, chunk_content in enumerate(truncated_chunks):

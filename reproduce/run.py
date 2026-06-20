@@ -431,6 +431,8 @@ def parse_args():
     p.add_argument("--max_questions", type=int, default=0,
                    help="0 = all questions; >0 limits to the first N (quick test)")
     p.add_argument("--results_file", default=None, help="override output JSON path")
+    p.add_argument("--version-cot", dest="version_cot", action="store_true",
+                   help="(ours) enable conflict-aware version timeline in the answer context; default off = baseline")
     return p.parse_args()
 
 def main():
@@ -441,8 +443,9 @@ def main():
     work_dir.mkdir(exist_ok=True)
     corpus_file = Path(f"datasets/{label}/Corpus.json")
     questions_file = Path(f"datasets/{label}/Question.json")
+    _vcot = "_vcot" if args.version_cot else ""  # keep A/B runs in separate files
     results_file = (Path(args.results_file) if args.results_file
-                    else Path(f"results_{args.dataset}_mode-{args.mode}_topk-{args.top_k}.json"))
+                    else Path(f"results_{args.dataset}_mode-{args.mode}_topk-{args.top_k}{_vcot}.json"))
 
     print("🔧 Checking configuration...")
     print(f"   Dataset        : {args.dataset} -> datasets/{label}/")
@@ -451,6 +454,7 @@ def main():
     print(f"   Embedding      : BGE-M3 @ {LOCAL_BGE_PATH}")
     print(f"   Working dir    : {work_dir}")
     print(f"   Results file   : {results_file}")
+    print(f"   Version-CoT    : {'ON (ours)' if args.version_cot else 'OFF (baseline)'}")
 
     # --- DyG-RAG initialization ---
     embedding_func = get_bge_embedding_func()
@@ -468,6 +472,7 @@ def main():
         model_path="./models",
         ce_model="cross-encoder/ms-marco-TinyBERT-L-2-v2",
         ner_model_name="dslim_bert_base_ner",
+        enable_version_cot=args.version_cot,
     )
     embedding_func.model = model_ref
 
