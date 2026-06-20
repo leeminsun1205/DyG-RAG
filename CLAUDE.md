@@ -28,12 +28,13 @@ Distinguishes what **exists in the code today** from what is a **research goal**
   - `graphrag/_op.py`: event `context` is coerced to `""` when the LLM emits `"context": null` (lines ~586 and the `_merge_events_then_upsert` lists ~835). Without this, `max(contexts, key=len)` does `len(None)` and the whole insert crashes. Surfaced by gpt-4.1-nano (Qwen rarely emitted null); latent for any model.
   - `graphrag/evaluate.py` (~line 166): `str(results_file).replace('.json', '_eval.json')` — `RESULTS_FILE` is a `Path`, and `Path.replace(a, b)` is a filesystem rename, not a string replace.
 - **Kaggle install recipe (ours):** `requirements-kaggle.txt` — a minimal, pinned dependency set that works on the Kaggle Python-3.10 / torch-2.0.0 image. Do **not** `pip install -r requirements.txt` on Kaggle (it pins `umap==0.1.1`, broken on py3.10, and pulls vllm/faiss/colbert/llama-index that DyG-RAG never imports). See Runtime Environment.
+- **Conflict-aware Version-CoT (ours, flag-gated — first piece of the VDS contribution).** `graphrag/versioning.py` + field `enable_version_cot: bool = False` on `GraphRAG` (default off → baseline byte-identical) + `--version-cot` flag in `run.py`. When ON, `dynamic_query` makes **one extra LLM call** over the query's retrieved events to extract structured `(subject, attribute, value, validity-interval)` facts, groups them into per-`(entity,attribute)` **version timelines**, and prepends that block to the answer context so the LLM can pick the version valid at the asked time instead of dumping every version. Interval logic uses Allen relations with **strict interior overlap** (touching boundaries = succession, not conflict); only `spouse` is treated single-valued (people hold concurrent positions/employers/etc., so those are multi-valued and overlap is legitimate, not a conflict). Costs ~+1 LLM call/query. Prototype/offline-test modules live in `experiments/versioning/`. Output of a `--version-cot` run is auto-suffixed `_vcot`.
 
-**Not implemented yet (project research TODO — no code for these here):**
+**Not implemented yet (project research TODO):**
 
-- **Conflict detection / `superseded` marking.** DyG-RAG models events on a timeline but does **not** detect that a newer event contradicts an older one, nor mark anything superseded. This is the central VDS research goal and must be built.
-- **Provenance / reliability-weighted scoring.** Events have a `source_id` (chunk provenance) but retrieval scoring uses only semantic + temporal signals; no reliability/source weighting.
-- **Knowledge update / version-aware retrieval & evaluation.** No synthetic "versioned fact" benchmark, no version-pick metric. The reproduction datasets test temporal QA accuracy, not knowledge-update behavior.
+- **Conflict detection / `superseded` marking — PARTIAL.** Done at **query time** inside Version-CoT: single-valued overlap → transient `superseded` flag in the rendered timeline. **Not yet:** insert-time detection, *persistent* superseded marking on the event graph, and an NLI tier (DeBERTa-MNLI) for surface-different contradictions. Caveat learned from a real run: ComplexTR is clean encyclopedic data with ~**0 natural conflicts** (what first looked like conflicts were concurrent roles), so conflict detection must be **evaluated on an injected/synthetic versioned benchmark**, not on natural ComplexTR.
+- **Provenance / reliability-weighted scoring.** Events have a `source_id` (carried through to the versioned facts) but retrieval scoring still uses only semantic + temporal signals; no reliability/source weighting yet.
+- **Knowledge update / version-aware retrieval & evaluation.** Version-CoT is a first query-time version-*selection* step, but there is still **no synthetic "versioned fact" benchmark and no version-pick metric**, and retrieval edge-scoring is unchanged. The reproduction datasets test temporal QA accuracy, not knowledge-update behavior. A planned optimization is to precompute facts at insert (keyed by `event_id`) to drop the per-query extraction call.
 
 **Maintenance rule:** When a code change implements, removes, or materially changes any feature above, update this section **in the same task** — move completed TODOs into "Implemented" and record new limitations. A stale status here is worse than none.
 
@@ -135,6 +136,7 @@ Notes:
 
 - `run.py` prints progress and ends with a formatted metrics block (Accuracy, Recall, Precision, F1, EM, Avg query time — all 2-decimal) and writes `results_{dataset}_mode-{mode}_topk-{top_k}.json` (+ `..._eval.json`).
 - Defaults: `--mode dynamic` (only mode implemented), `--top_k 20`, `--concurrency 5`, `--max_questions 0` (all). Override on the CLI.
+- `--version-cot` (ours, default off) turns on conflict-aware Version-CoT; its results file is auto-suffixed `_vcot` so an A/B run (`run.py --dataset complextr` then `run.py --dataset complextr --version-cot`) does not overwrite the baseline. Shares the same `<dataset>_dir` index (no rebuild). See Implemented.
 - The headline metrics for these datasets are **Accuracy (inclusion) and Recall**; F1/EM are printed but not paper-comparable with the verbose `dynamic_QA` prompt.
 
 ---
@@ -191,6 +193,7 @@ dynamic_query(q, param)
 → _random_walk_graph_traversal()        # weighted walk: walk_depth=2, walk_n=3, walk_nodes=5
 → get_nodes_batch() for traversed events
 → build_time_CoT()                       # chronological timeline block (if if_timeline_events)
+→ build_version_section()  [if enable_version_cot]  # (ours) +1 LLM call → conflict-aware version timeline prepended to events_section
 → text_chunks.get_by_ids() for source chunks (truncated to max_token_for_text_unit)
 → PROMPTS["dynamic_QA"] (or dynamic_QA_wo_timeline ablation) formatted with {question, events_data, chunks_data}
 → best_model_func(context)               # final answer (cached)
@@ -213,6 +216,7 @@ If reranking yields no events, the flow still proceeds on whatever survived vect
 | `enable_bm25_reranking` | False | BM25 alternative reranker |
 | `enable_timestamp_encoding` / `timestamp_dim` | True / 16 | Fourier timestamp encoding in events VDB |
 | `event_extract_max_gleaning` | 1 | extra LLM passes to catch missed events |
+| `enable_version_cot` | False | **(ours)** prepend a conflict-aware version timeline to the answer context; off = baseline (see Implemented) |
 | `best/cheap_model_max_token_size` | 32768 (reproduce scripts override to 16384) | LLM context budget |
 | `random_seed` | 42 | reproducibility |
 
