@@ -193,6 +193,9 @@ class GraphRAG:
     enable_version_cot: bool = False  # (ours) prepend a conflict-aware version timeline to the answer context; default False = baseline unchanged
     enable_version_cot_seed_events: bool = False  # Let Version-CoT also read reranked seed events; default False = baseline/version-cot v1 unchanged
     enable_interval_events: bool = False  # Store optional start/end interval metadata on events; default False = baseline unchanged
+    enable_allen_edges: bool = False  # Store Allen interval relation metadata on event graph edges; default False = baseline unchanged
+    enable_allen_traversal: bool = False  # Use Allen/time metadata to bias graph traversal; default False = baseline unchanged
+    allen_traversal_weight: float = 0.3  # Boost strength for query-time interval relevance during Allen-guided traversal
     enable_interval_rerank: bool = False  # Use interval/query-window relevance during seed reranking; default False = baseline unchanged
     interval_rerank_weight: float = 0.2  # Blend weight for interval relevance when interval rerank is enabled
 
@@ -705,7 +708,8 @@ class GraphRAG:
                     seed_event_ids=seed_event_ids,
                     max_depth=self.walk_depth,
                     max_nodes_per_seed=self.walk_nodes,
-                    num_walks=self.walk_n
+                    num_walks=self.walk_n,
+                    time_constraints=time_constraints,
                 )
                 logger.info(f"Graph traversal found {len(graph_traversed_event_ids)} total events")
             except Exception as e:
@@ -1069,6 +1073,7 @@ class GraphRAG:
         max_depth=3,
         max_nodes_per_seed=10,
         num_walks=5,
+        time_constraints=None,
     ):
         """
         Explore the event graph starting from a set of seed events.
@@ -1124,7 +1129,16 @@ class GraphRAG:
                                 == "event_temporal_proximity"
                             ):
                                 neighbors.append(neighbor_node)
-                                weights.append(edge_data.get("weight", 1.0))
+                                neighbor_data = all_nodes.get(neighbor_node, {})
+                                weights.append(
+                                    self._allen_guided_traversal_weight(
+                                        edge_data=edge_data,
+                                        current_node=current_node,
+                                        neighbor_node=neighbor_node,
+                                        neighbor_data=neighbor_data,
+                                        time_constraints=time_constraints,
+                                    )
+                                )
 
                     # Don't walk back to a node we just visited in this path.
                     available_indices = [
@@ -1323,6 +1337,59 @@ class GraphRAG:
                     return True
         
         return False
+
+    def _allen_relation_for_direction(self, edge_data: Dict, current_node: str, neighbor_node: str) -> str:
+        relation = edge_data.get("allen_relation", "unknown")
+        inverse = edge_data.get("allen_relation_inverse", "unknown")
+        source_id = edge_data.get("allen_source_id")
+        target_id = edge_data.get("allen_target_id")
+        if current_node == source_id and neighbor_node == target_id:
+            return relation
+        if current_node == target_id and neighbor_node == source_id:
+            return inverse
+        return relation or "unknown"
+
+    def _allen_relation_factor(self, relation: str) -> float:
+        factors = {
+            "equals": 1.20,
+            "overlaps": 1.15,
+            "overlapped_by": 1.15,
+            "during": 1.15,
+            "contains": 1.15,
+            "starts": 1.10,
+            "started_by": 1.10,
+            "finishes": 1.10,
+            "finished_by": 1.10,
+            "meets": 1.05,
+            "met_by": 1.05,
+            "before": 0.95,
+            "after": 0.95,
+        }
+        return factors.get(relation, 1.0)
+
+    def _allen_guided_traversal_weight(
+        self,
+        edge_data: Dict,
+        current_node: str,
+        neighbor_node: str,
+        neighbor_data: Dict,
+        time_constraints: Optional[Dict] = None,
+    ) -> float:
+        base_weight = float(edge_data.get("weight", 1.0) or 1.0)
+        if not self.enable_allen_traversal:
+            return base_weight
+
+        relation = self._allen_relation_for_direction(edge_data, current_node, neighbor_node)
+        relation_factor = self._allen_relation_factor(relation)
+
+        time_factor = 1.0
+        q_start, q_end = self._query_interval_bounds(time_constraints or {})
+        if q_start is not None and q_end is not None:
+            interval_score = self.calculate_interval_relevance_score(neighbor_data, time_constraints or {})
+            boost = max(0.0, min(1.0, getattr(self, "allen_traversal_weight", 0.3)))
+            time_factor += boost * interval_score
+
+        return max(0.0, base_weight * relation_factor * time_factor)
 
     def _parse_time_bound(self, value: str, is_end: bool = False) -> Optional[int]:
         if not value or value == "static" or value == "unknown":

@@ -50,6 +50,7 @@ class EventRelationshipConfig:
     max_links: int = 3
     time_factor: float = 1.0
     decay_rate: float = 0.01
+    enable_allen_edges: bool = False
     
     @classmethod
     def from_dict(cls, config_dict: dict) -> 'EventRelationshipConfig':
@@ -60,7 +61,8 @@ class EventRelationshipConfig:
             time_ratio=config_dict.get("time_ratio", 0.4),
             max_links=config_dict.get("max_links", 3),
             time_factor=config_dict.get("time_factor", 1.0),
-            decay_rate=config_dict.get("decay_rate", 0.01)
+            decay_rate=config_dict.get("decay_rate", 0.01),
+            enable_allen_edges=config_dict.get("enable_allen_edges", False),
         )
 
 
@@ -74,6 +76,7 @@ class ExtractionConfig:
     event_extract_max_gleaning: int = 3
     enable_timestamp_encoding: bool = False
     enable_interval_events: bool = False
+    enable_allen_edges: bool = False
     if_wri_ents: bool = False
     
     # Relationship computation settings
@@ -244,6 +247,133 @@ def extract_interval_metadata(raw_time: str, sentence: str = "") -> dict:
         "time_expression": time_expression,
     }
 
+def _parse_time_bound(value: str | None) -> Optional[datetime.datetime]:
+    if value in (None, "", "static"):
+        return None
+    value = str(value).strip()
+    if not value:
+        return None
+    try:
+        if re.fullmatch(r"\d{4}", value):
+            return datetime.datetime(int(value), 1, 1)
+        if re.fullmatch(r"\d{4}-\d{2}", value):
+            year, month = value.split("-")
+            return datetime.datetime(int(year), int(month), 1)
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            year, month, day = value.split("-")
+            return datetime.datetime(int(year), int(month), int(day))
+        return date_parser.parse(value, default=datetime.datetime(1, 1, 1))
+    except Exception:
+        return None
+
+
+def _event_interval_bounds(event_data: dict) -> tuple[Optional[datetime.datetime], Optional[datetime.datetime]]:
+    start = _parse_time_bound(event_data.get("start_time"))
+    end = _parse_time_bound(event_data.get("end_time"))
+
+    if start is None and end is None:
+        point = _parse_time_bound(event_data.get("timestamp"))
+        start = point
+        end = point
+    elif start is None:
+        start = end
+    elif end is None:
+        end = start
+
+    if start is not None and end is not None and start > end:
+        start, end = end, start
+    return start, end
+
+
+def _allen_relation_from_bounds(
+    a_start: datetime.datetime,
+    a_end: datetime.datetime,
+    b_start: datetime.datetime,
+    b_end: datetime.datetime,
+) -> str:
+    if a_start == b_start and a_end == b_end:
+        return "equals"
+    if a_end < b_start:
+        return "before"
+    if a_start > b_end:
+        return "after"
+    if a_end == b_start:
+        return "meets"
+    if a_start == b_end:
+        return "met_by"
+    if a_start == b_start and a_end < b_end:
+        return "starts"
+    if a_start == b_start and a_end > b_end:
+        return "started_by"
+    if a_end == b_end and a_start > b_start:
+        return "finishes"
+    if a_end == b_end and a_start < b_start:
+        return "finished_by"
+    if b_start < a_start and a_end < b_end:
+        return "during"
+    if a_start < b_start and b_end < a_end:
+        return "contains"
+    if a_start < b_start < a_end < b_end:
+        return "overlaps"
+    if b_start < a_start < b_end < a_end:
+        return "overlapped_by"
+    return "overlaps"
+
+
+def _inverse_allen_relation(relation: str) -> str:
+    inverse = {
+        "before": "after",
+        "after": "before",
+        "meets": "met_by",
+        "met_by": "meets",
+        "overlaps": "overlapped_by",
+        "overlapped_by": "overlaps",
+        "starts": "started_by",
+        "started_by": "starts",
+        "during": "contains",
+        "contains": "during",
+        "finishes": "finished_by",
+        "finished_by": "finishes",
+        "equals": "equals",
+    }
+    return inverse.get(relation, "unknown")
+
+
+def compute_allen_edge_metadata(source_id: str, source_event: dict, target_id: str, target_event: dict) -> dict:
+    """Return Allen relation metadata for the canonical undirected edge endpoint order."""
+    edge_source_id, edge_target_id = sorted([source_id, target_id])
+    source = source_event if edge_source_id == source_id else target_event
+    target = target_event if edge_target_id == target_id else source_event
+
+    source_start, source_end = _event_interval_bounds(source)
+    target_start, target_end = _event_interval_bounds(target)
+    metadata = {
+        "allen_source_id": edge_source_id,
+        "allen_target_id": edge_target_id,
+        "allen_relation": "unknown",
+        "allen_relation_inverse": "unknown",
+        "allen_gap_days": "",
+        "allen_overlap_days": "",
+    }
+    if None in (source_start, source_end, target_start, target_end):
+        return metadata
+
+    relation = _allen_relation_from_bounds(source_start, source_end, target_start, target_end)
+    metadata["allen_relation"] = relation
+    metadata["allen_relation_inverse"] = _inverse_allen_relation(relation)
+
+    if source_end < target_start:
+        metadata["allen_gap_days"] = str((target_start - source_end).days)
+    elif target_end < source_start:
+        metadata["allen_gap_days"] = str((source_start - target_end).days)
+    else:
+        overlap_start = max(source_start, target_start)
+        overlap_end = min(source_end, target_end)
+        metadata["allen_overlap_days"] = str(max(0, (overlap_end - overlap_start).days))
+
+    return metadata
+
+
 def calculate_time_distance(timestamp1: str, timestamp2: str) -> Optional[int]:
     """Calculate days between two timestamps. Returns None if either is static."""
     if timestamp1 == "static" or timestamp2 == "static":
@@ -370,6 +500,15 @@ def compute_event_relationships_batch(event_batch_data: tuple) -> List[tuple]:
                 "source_id": current_event_data.get("source_id", ""),
                 "is_undirected": True
             }
+            if config.enable_allen_edges:
+                edge_data.update(
+                    compute_allen_edge_metadata(
+                        current_event_id,
+                        current_event_data,
+                        other_id,
+                        valid_events[other_id][0],
+                    )
+                )
             
             relationships.append((current_event_id, other_id, edge_data))
             relationships.append((other_id, current_event_id, edge_data))
@@ -510,6 +649,7 @@ async def extract_events(
         event_extract_max_gleaning=global_config.get("event_extract_max_gleaning", 3),
         enable_timestamp_encoding=global_config.get("enable_timestamp_encoding", False),
         enable_interval_events=global_config.get("enable_interval_events", False),
+        enable_allen_edges=global_config.get("enable_allen_edges", False),
         if_wri_ents=global_config.get("if_wri_ents", False),
         event_relationship_batch_size=global_config.get("event_relationship_batch_size", 100),
         event_relationship_max_workers=global_config.get("event_relationship_max_workers", None)
@@ -1030,7 +1170,8 @@ async def batch_process_event_relationships_multiprocess(
         "time_ratio": global_config.get("time_ratio", 0.4),
         "max_links": global_config.get("max_links", 3),
         "time_factor": global_config.get("time_factor", 1.0),
-        "decay_rate": global_config.get("decay_rate", 0.01)
+        "decay_rate": global_config.get("decay_rate", 0.01),
+        "enable_allen_edges": global_config.get("enable_allen_edges", False),
     }
     
     # Batch events for processing

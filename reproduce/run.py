@@ -437,6 +437,10 @@ def parse_args():
                    help="(ours) let Version-CoT also read reranked seed events; implies --version-cot")
     p.add_argument("--interval-events", dest="interval_events", action="store_true",
                    help="(ours) store rule-based start/end interval metadata on events; default off = baseline")
+    p.add_argument("--allen-edges", dest="allen_edges", action="store_true",
+                   help="(ours) store Allen interval relation metadata on event graph edges; implies --interval-events")
+    p.add_argument("--allen-traversal", dest="allen_traversal", action="store_true",
+                   help="(ours) bias graph traversal with Allen/time metadata; implies --allen-edges and --interval-events")
     p.add_argument("--interval-rerank", dest="interval_rerank", action="store_true",
                    help="(ours) blend query-window interval relevance into seed reranking; implies --interval-events")
     return p.parse_args()
@@ -447,6 +451,12 @@ def main():
     if args.version_cot_seeds and not args.version_cot:
         logger.warning("--version-cot-seeds requires Version-CoT; enabling --version-cot for this run")
         args.version_cot = True
+    if args.allen_traversal and not args.allen_edges:
+        logger.warning("--allen-traversal requires Allen edge metadata; enabling --allen-edges for this run")
+        args.allen_edges = True
+    if args.allen_edges and not args.interval_events:
+        logger.warning("--allen-edges requires interval metadata; enabling --interval-events for this run")
+        args.interval_events = True
     if args.interval_rerank and not args.interval_events:
         logger.warning("--interval-rerank requires interval metadata; enabling --interval-events for this run")
         args.interval_events = True
@@ -462,6 +472,10 @@ def main():
         suffixes.append("vcot")
     if args.interval_events:
         suffixes.append("interval-events")
+    if args.allen_edges:
+        suffixes.append("allen-edges")
+    if args.allen_traversal:
+        suffixes.append("allen-traversal")
     if args.interval_rerank:
         suffixes.append("interval-rerank")
     feature_suffix = ("_" + "_".join(suffixes)) if suffixes else ""
@@ -478,6 +492,8 @@ def main():
     print(f"   Version-CoT    : {'ON (ours)' if args.version_cot else 'OFF (baseline)'}")
     print(f"   Version-CoT seeds: {'ON (ours)' if args.version_cot_seeds else 'OFF (baseline)'}")
     print(f"   Interval events: {'ON (ours)' if args.interval_events else 'OFF (baseline)'}")
+    print(f"   Allen edges    : {'ON (ours)' if args.allen_edges else 'OFF (baseline)'}")
+    print(f"   Allen traversal: {'ON (ours)' if args.allen_traversal else 'OFF (baseline)'}")
     print(f"   Interval rerank: {'ON (ours)' if args.interval_rerank else 'OFF (baseline)'}")
 
     # --- DyG-RAG initialization ---
@@ -499,6 +515,8 @@ def main():
         enable_version_cot=args.version_cot,
         enable_version_cot_seed_events=args.version_cot_seeds,
         enable_interval_events=args.interval_events,
+        enable_allen_edges=args.allen_edges,
+        enable_allen_traversal=args.allen_traversal,
         enable_interval_rerank=args.interval_rerank,
     )
     embedding_func.model = model_ref

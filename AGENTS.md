@@ -40,6 +40,8 @@ Implemented today:
 - Version-CoT seed expansion: `GraphRAG.enable_version_cot_seed_events=False` and `reproduce/run.py --version-cot-seeds`. Default off means both baseline and `--version-cot` v1 stay unchanged. When on, Version-CoT reads the union of graph-traversed events plus reranked seed events, deduplicated by event ID/sentence. This changes only the Version-CoT context input, not seed selection, traversal, source chunk retrieval, or evaluation. It implies `--version-cot` in the runner and output files are suffixed `_vcot-seeds`.
 - Interval event metadata: `GraphRAG.enable_interval_events=False` and `reproduce/run.py --interval-events`. Default off means baseline behavior should remain unchanged. When on, extraction stores rule-based `start_time`, `end_time`, `time_fuzzy`, and `time_expression` fields on event nodes/vector metadata while preserving the original `timestamp` and event IDs. Output files are suffixed `_interval-events`. This is schema groundwork for interval-aware retrieval.
 - Interval-aware reranking: `GraphRAG.enable_interval_rerank=False` and `reproduce/run.py --interval-rerank`. Default off means baseline behavior should remain unchanged. When on, seed reranking blends the existing cross-encoder/BM25+entity score with query-window interval relevance using `interval_rerank_weight` (default 0.2). It adds no LLM calls and implies `--interval-events` in the runner. Output files are suffixed `_interval-rerank`.
+- Allen edge metadata: `GraphRAG.enable_allen_edges=False` and `reproduce/run.py --allen-edges`. Default off means baseline behavior should remain unchanged. When on, graph construction stores Allen interval relation metadata (`allen_relation`, inverse relation, canonical endpoint IDs, gap/overlap days) on event graph edges without changing edge scoring, traversal, prompts, or evaluation. It implies `--interval-events` in the runner and output files are suffixed `_allen-edges`. This is schema groundwork for Allen-guided traversal.
+- Allen-guided traversal: `GraphRAG.enable_allen_traversal=False` and `reproduce/run.py --allen-traversal`. Default off means baseline behavior should remain unchanged. When on, random-walk graph traversal keeps the existing edge topology but biases edge weights using Allen relation metadata and neighbor interval relevance to the parsed query time. It implies `--allen-edges` and `--interval-events` in the runner and output files are suffixed `_allen-traversal`.
 
 Recent full ComplexTR ablation with `gemini-2.5-flash-lite`:
 
@@ -58,7 +60,7 @@ Not implemented yet:
 - NLI-based contradiction detection.
 - Provenance/reliability-weighted scoring.
 - Synthetic or derived versioned-fact benchmark and version-pick metric.
-- IA-RAG-style interval-native IEUs, Allen-relation graph construction, Sub-graph Time Tightening, or Thematic Forest. The current interval metadata/rerank features are lightweight/backward-compatible, not full IEU replacement.
+- IA-RAG-style interval-native IEUs, Sub-graph Time Tightening, or Thematic Forest. The current interval metadata/rerank/Allen-edge/traversal features are lightweight/backward-compatible, not full IEU replacement.
 
 ## Research Context and Goals
 
@@ -169,6 +171,8 @@ Key config defaults:
 | `enable_version_cot` | False | optional Version-CoT; off = baseline |
 | `enable_version_cot_seed_events` | False | optional seed-event expansion for Version-CoT; off = Version-CoT v1 |
 | `enable_interval_events` | False | optional rule-based interval metadata on events; off = baseline |
+| `enable_allen_edges` | False | optional Allen interval relation metadata on event graph edges; off = baseline |
+| `enable_allen_traversal` / `allen_traversal_weight` | False / 0.3 | optional Allen/time-biased graph traversal; off = baseline |
 | `enable_interval_rerank` / `interval_rerank_weight` | False / 0.2 | optional query-window interval relevance blended into seed reranking |
 
 `QueryParam` lives in `graphrag/base.py`: `mode`, `top_k`, `et_top_k`, `topk1`, `max_token_for_text_unit`, `time_constraints`, `entities`, etc.
@@ -285,7 +289,7 @@ work_dir/
 dyg_rag_cache_*/
 ```
 
-These contain docs, chunks, LLM cache, event vector DB, and graph. Re-running after a crash may reuse cached extraction. If retrieval looks strange, suspect stale cache or half-written graph. New index-time features such as `--interval-events` and `--interval-rerank` require a clean rebuild, otherwise existing graph nodes will not have interval metadata and rerank will mostly fall back to timestamps.
+These contain docs, chunks, LLM cache, event vector DB, and graph. Re-running after a crash may reuse cached extraction. If retrieval looks strange, suspect stale cache or half-written graph. New index-time features such as `--interval-events`, `--allen-edges`, `--allen-traversal`, and `--interval-rerank` require a clean rebuild, otherwise existing graph nodes/edges will not have interval metadata and rerank/traversal will mostly fall back to timestamps.
 
 Clean rebuild example:
 
@@ -323,8 +327,9 @@ Planned IA-RAG-inspired integration order:
 
 1. Implemented: add backward-compatible interval metadata (`start_time`, `end_time`, `time_fuzzy`, `time_expression`) to events behind `--interval-events`.
 2. Implemented: add interval-aware seed reranking behind `--interval-rerank`.
-3. Add Allen relation edge metadata and Allen-guided traversal behind flags.
-4. Extend fuzzy interval heuristics behind a flag if benchmark evidence supports it.
+3. Implemented: add Allen relation edge metadata behind `--allen-edges`.
+4. Implemented: add Allen-guided traversal behind `--allen-traversal`.
+5. Extend fuzzy interval heuristics behind a flag if benchmark evidence supports it.
 
 Do not implement a full IA-RAG Thematic Forest, LLM-heavy IEU deduplication, or full Sub-graph Time Tightening unless explicitly requested.
 
