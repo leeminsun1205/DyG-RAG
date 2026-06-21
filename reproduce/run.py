@@ -441,6 +441,8 @@ def parse_args():
                    help="(ours) store Allen interval relation metadata on event graph edges; implies --interval-events")
     p.add_argument("--allen-traversal", dest="allen_traversal", action="store_true",
                    help="(ours) bias graph traversal with Allen/time metadata; implies --allen-edges and --interval-events")
+    p.add_argument("--normalize-query-time", dest="normalize_query_time", action="store_true",
+                   help="(ours) normalize explicit date-offset query times such as '25 years before January 1944'; default off = baseline")
     p.add_argument("--interval-rerank", dest="interval_rerank", action="store_true",
                    help="(ours) blend query-window interval relevance into seed reranking; implies --interval-events")
     return p.parse_args()
@@ -476,6 +478,8 @@ def main():
         suffixes.append("allen-edges")
     if args.allen_traversal:
         suffixes.append("allen-traversal")
+    if args.normalize_query_time:
+        suffixes.append("normalize-query-time")
     if args.interval_rerank:
         suffixes.append("interval-rerank")
     feature_suffix = ("_" + "_".join(suffixes)) if suffixes else ""
@@ -494,6 +498,7 @@ def main():
     print(f"   Interval events: {'ON (ours)' if args.interval_events else 'OFF (baseline)'}")
     print(f"   Allen edges    : {'ON (ours)' if args.allen_edges else 'OFF (baseline)'}")
     print(f"   Allen traversal: {'ON (ours)' if args.allen_traversal else 'OFF (baseline)'}")
+    print(f"   Query time norm: {'ON (ours)' if args.normalize_query_time else 'OFF (baseline)'}")
     print(f"   Interval rerank: {'ON (ours)' if args.interval_rerank else 'OFF (baseline)'}")
 
     # --- DyG-RAG initialization ---
@@ -517,6 +522,7 @@ def main():
         enable_interval_events=args.interval_events,
         enable_allen_edges=args.allen_edges,
         enable_allen_traversal=args.allen_traversal,
+        enable_query_time_normalization=args.normalize_query_time,
         enable_interval_rerank=args.interval_rerank,
     )
     embedding_func.model = model_ref

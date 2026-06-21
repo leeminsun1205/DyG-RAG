@@ -2,6 +2,7 @@ import asyncio
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from dateutil.relativedelta import relativedelta
 from functools import partial
 from typing import Callable, Dict, List, Optional, Type, Union, cast, Tuple
 import torch
@@ -196,6 +197,7 @@ class GraphRAG:
     enable_allen_edges: bool = False  # Store Allen interval relation metadata on event graph edges; default False = baseline unchanged
     enable_allen_traversal: bool = False  # Use Allen/time metadata to bias graph traversal; default False = baseline unchanged
     allen_traversal_weight: float = 0.3  # Boost strength for query-time interval relevance during Allen-guided traversal
+    enable_query_time_normalization: bool = False  # Normalize explicit before/after date-offset queries; default False = baseline unchanged
     enable_interval_rerank: bool = False  # Use interval/query-window relevance during seed reranking; default False = baseline unchanged
     interval_rerank_weight: float = 0.2  # Blend weight for interval relevance when interval rerank is enabled
 
@@ -1731,7 +1733,81 @@ class GraphRAG:
         time_constraints, entities = await self.aextract_time_and_entities(
             query, query_param, global_config, hashing_kv
         )
+        if self.enable_query_time_normalization:
+            time_constraints = self._normalize_query_time_constraints(query, time_constraints)
         return time_constraints, entities
+
+    def _parse_offset_anchor_date(self, value: str) -> Optional[datetime]:
+        value = value.strip().replace(",", "")
+        month_names = {
+            "jan": 1, "january": 1,
+            "feb": 2, "february": 2,
+            "mar": 3, "march": 3,
+            "apr": 4, "april": 4,
+            "may": 5,
+            "jun": 6, "june": 6,
+            "jul": 7, "july": 7,
+            "aug": 8, "august": 8,
+            "sep": 9, "sept": 9, "september": 9,
+            "oct": 10, "october": 10,
+            "nov": 11, "november": 11,
+            "dec": 12, "december": 12,
+        }
+        match = re.fullmatch(r"([A-Za-z]+)\s+(\d{4})", value)
+        if match:
+            month = month_names.get(match.group(1).lower())
+            if month:
+                return datetime(int(match.group(2)), month, 1)
+        match = re.fullmatch(r"(\d{4})(?:-(\d{1,2})(?:-(\d{1,2}))?)?", value)
+        if match:
+            year = int(match.group(1))
+            month = int(match.group(2) or 1)
+            day = int(match.group(3) or 1)
+            return datetime(year, month, day)
+        return None
+
+    def _format_normalized_query_time(self, target: datetime, anchor_text: str) -> str:
+        if re.search(r"[A-Za-z]+\s+\d{4}", anchor_text):
+            return target.strftime("%Y-%m")
+        if re.fullmatch(r"\d{4}", anchor_text.strip()):
+            return target.strftime("%Y")
+        if re.fullmatch(r"\d{4}-\d{1,2}", anchor_text.strip()):
+            return target.strftime("%Y-%m")
+        return target.strftime("%Y-%m-%d")
+
+    def _extract_query_offset_target_time(self, query: str) -> Optional[str]:
+        pattern = re.compile(
+            r"(?P<years>\d+)\s+years?"
+            r"(?:\s+and\s+(?P<months>\d+)\s+months?)?"
+            r"\s+(?P<direction>before|after)\s+"
+            r"(?P<anchor>(?:[A-Za-z]+\s+\d{4})|(?:\d{4}(?:-\d{1,2}(?:-\d{1,2})?)?))",
+            re.IGNORECASE,
+        )
+        match = pattern.search(query)
+        if not match:
+            return None
+        years = int(match.group("years") or 0)
+        months = int(match.group("months") or 0)
+        anchor_text = match.group("anchor")
+        anchor = self._parse_offset_anchor_date(anchor_text)
+        if anchor is None:
+            return None
+        delta = relativedelta(years=years, months=months)
+        target = anchor - delta if match.group("direction").lower() == "before" else anchor + delta
+        return self._format_normalized_query_time(target, anchor_text)
+
+    def _normalize_query_time_constraints(self, query: str, time_constraints: Dict) -> Dict:
+        target_time = self._extract_query_offset_target_time(query)
+        if not target_time:
+            return time_constraints
+        normalized = dict(time_constraints or {})
+        normalized["start_time"] = target_time
+        normalized["end_time"] = target_time
+        logger.info(
+            "query-time-normalization: normalized offset query time to %s",
+            target_time,
+        )
+        return normalized
 
     async def aextract_time_and_entities(
         self,

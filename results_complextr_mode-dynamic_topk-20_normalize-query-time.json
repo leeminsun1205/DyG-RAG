@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "dataset": "ComplexTR",
+    "total_questions": 1,
+    "completed_questions": 1,
+    "timestamp": "2026-06-22 00:45:28",
+    "query_mode": "dynamic",
+    "query_top_k": 20,
+    "total_time": 1.146848440170288,
+    "avg_time_per_question": 1.1468489170074463
+  },
+  "results": [
+    {
+      "question_id": 0,
+      "question": "Which employer did Hans Kramers work for in October 1920?",
+      "answer": null,
+      "error": "Error code: 401 - {'error': {'message': 'Incorrect API key provided: EMPTY. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}",
+      "status": "exception",
+      "traceback": "Traceback (most recent call last):\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/reproduce/run.py\", line 320, in process_single_query\n    result = await graph_rag.aquery(question_text, param=query_param)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/graphrag/graphrag.py\", line 555, in aquery\n    response = await self.dynamic_query(\n               ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/graphrag/graphrag.py\", line 567, in dynamic_query\n    time_constraints, entities = await self.parse_query_time_and_entities(\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/graphrag/graphrag.py\", line 1733, in parse_query_time_and_entities\n    time_constraints, entities = await self.aextract_time_and_entities(\n                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/graphrag/graphrag.py\", line 1870, in aextract_time_and_entities\n    result = await use_model_func(te_prompt, **llm_kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/graphrag/_utils.py\", line 258, in wait_func\n    result = await func(*args, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/reproduce/run.py\", line 215, in best_model_func\n    return await _llm_with_cache(\n           ^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/reproduce/run.py\", line 207, in _llm_with_cache\n    answer = await _chat_completion(model=model, messages=msgs, **kwargs)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/Documents/Project/VDT2026/DyG-RAG/reproduce/run.py\", line 181, in _chat_completion\n    response = await client.chat.completions.create(model=model, messages=messages, **kwargs)\n               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/miniconda3/envs/SE363/lib/python3.12/site-packages/openai/resources/chat/completions/completions.py\", line 2814, in create\n    return await self._post(\n           ^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/miniconda3/envs/SE363/lib/python3.12/site-packages/openai/_base_client.py\", line 1931, in post\n    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/minsun/miniconda3/envs/SE363/lib/python3.12/site-packages/openai/_base_client.py\", line 1716, in request\n    raise self._make_status_error_from_response(err.response) from None\nopenai.AuthenticationError: Error code: 401 - {'error': {'message': 'Incorrect API key provided: EMPTY. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'param': None, 'code': 'invalid_api_key'}}\n"
+    }
+  ]
+}

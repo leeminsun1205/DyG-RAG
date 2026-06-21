@@ -42,6 +42,7 @@ Implemented today:
 - Interval-aware reranking: `GraphRAG.enable_interval_rerank=False` and `reproduce/run.py --interval-rerank`. Default off means baseline behavior should remain unchanged. When on, seed reranking blends the existing cross-encoder/BM25+entity score with query-window interval relevance using `interval_rerank_weight` (default 0.2). It adds no LLM calls and implies `--interval-events` in the runner. Output files are suffixed `_interval-rerank`.
 - Allen edge metadata: `GraphRAG.enable_allen_edges=False` and `reproduce/run.py --allen-edges`. Default off means baseline behavior should remain unchanged. When on, graph construction stores Allen interval relation metadata (`allen_relation`, inverse relation, canonical endpoint IDs, gap/overlap days) on event graph edges without changing edge scoring, traversal, prompts, or evaluation. It implies `--interval-events` in the runner and output files are suffixed `_allen-edges`. This is schema groundwork for Allen-guided traversal.
 - Allen-guided traversal: `GraphRAG.enable_allen_traversal=False` and `reproduce/run.py --allen-traversal`. Default off means baseline behavior should remain unchanged. When on, random-walk graph traversal keeps the existing edge topology but biases edge weights using Allen relation metadata and neighbor interval relevance to the parsed query time. It implies `--allen-edges` and `--interval-events` in the runner and output files are suffixed `_allen-traversal`.
+- Query-time normalization: `GraphRAG.enable_query_time_normalization=False` and `reproduce/run.py --normalize-query-time`. Default off means baseline behavior should remain unchanged. When on, query parsing applies a deterministic rule after LLM time/entity extraction for explicit offset patterns such as `25 years and 1 months before January 1944`, replacing `time_constraints` with the computed target month/date. It adds no LLM calls and output files are suffixed `_normalize-query-time`.
 
 Recent full ComplexTR ablation with `gemini-2.5-flash-lite`:
 
@@ -173,6 +174,7 @@ Key config defaults:
 | `enable_interval_events` | False | optional rule-based interval metadata on events; off = baseline |
 | `enable_allen_edges` | False | optional Allen interval relation metadata on event graph edges; off = baseline |
 | `enable_allen_traversal` / `allen_traversal_weight` | False / 0.3 | optional Allen/time-biased graph traversal; off = baseline |
+| `enable_query_time_normalization` | False | optional deterministic offset-date normalization for query time constraints; off = baseline |
 | `enable_interval_rerank` / `interval_rerank_weight` | False / 0.2 | optional query-window interval relevance blended into seed reranking |
 
 `QueryParam` lives in `graphrag/base.py`: `mode`, `top_k`, `et_top_k`, `topk1`, `max_token_for_text_unit`, `time_constraints`, `entities`, etc.
@@ -329,7 +331,8 @@ Planned IA-RAG-inspired integration order:
 2. Implemented: add interval-aware seed reranking behind `--interval-rerank`.
 3. Implemented: add Allen relation edge metadata behind `--allen-edges`.
 4. Implemented: add Allen-guided traversal behind `--allen-traversal`.
-5. Extend fuzzy interval heuristics behind a flag if benchmark evidence supports it.
+5. Implemented: add deterministic query-time normalization for explicit offset questions behind `--normalize-query-time`.
+6. Extend fuzzy interval heuristics behind a flag if benchmark evidence supports it.
 
 Do not implement a full IA-RAG Thematic Forest, LLM-heavy IEU deduplication, or full Sub-graph Time Tightening unless explicitly requested.
 
