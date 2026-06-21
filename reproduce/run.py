@@ -433,19 +433,33 @@ def parse_args():
     p.add_argument("--results_file", default=None, help="override output JSON path")
     p.add_argument("--version-cot", dest="version_cot", action="store_true",
                    help="(ours) enable conflict-aware version timeline in the answer context; default off = baseline")
+    p.add_argument("--interval-events", dest="interval_events", action="store_true",
+                   help="(ours) store rule-based start/end interval metadata on events; default off = baseline")
+    p.add_argument("--interval-rerank", dest="interval_rerank", action="store_true",
+                   help="(ours) blend query-window interval relevance into seed reranking; implies --interval-events")
     return p.parse_args()
 
 def main():
     args = parse_args()
     label = DATASETS[args.dataset]
+    if args.interval_rerank and not args.interval_events:
+        logger.warning("--interval-rerank requires interval metadata; enabling --interval-events for this run")
+        args.interval_events = True
 
     work_dir = Path(f"{args.dataset}_dir")
     work_dir.mkdir(exist_ok=True)
     corpus_file = Path(f"datasets/{label}/Corpus.json")
     questions_file = Path(f"datasets/{label}/Question.json")
-    _vcot = "_vcot" if args.version_cot else ""  # keep A/B runs in separate files
+    suffixes = []
+    if args.version_cot:
+        suffixes.append("vcot")
+    if args.interval_events:
+        suffixes.append("interval-events")
+    if args.interval_rerank:
+        suffixes.append("interval-rerank")
+    feature_suffix = ("_" + "_".join(suffixes)) if suffixes else ""
     results_file = (Path(args.results_file) if args.results_file
-                    else Path(f"results_{args.dataset}_mode-{args.mode}_topk-{args.top_k}{_vcot}.json"))
+                    else Path(f"results_{args.dataset}_mode-{args.mode}_topk-{args.top_k}{feature_suffix}.json"))
 
     print("🔧 Checking configuration...")
     print(f"   Dataset        : {args.dataset} -> datasets/{label}/")
@@ -455,6 +469,8 @@ def main():
     print(f"   Working dir    : {work_dir}")
     print(f"   Results file   : {results_file}")
     print(f"   Version-CoT    : {'ON (ours)' if args.version_cot else 'OFF (baseline)'}")
+    print(f"   Interval events: {'ON (ours)' if args.interval_events else 'OFF (baseline)'}")
+    print(f"   Interval rerank: {'ON (ours)' if args.interval_rerank else 'OFF (baseline)'}")
 
     # --- DyG-RAG initialization ---
     embedding_func = get_bge_embedding_func()
@@ -473,6 +489,8 @@ def main():
         ce_model="cross-encoder/ms-marco-TinyBERT-L-2-v2",
         ner_model_name="dslim_bert_base_ner",
         enable_version_cot=args.version_cot,
+        enable_interval_events=args.interval_events,
+        enable_interval_rerank=args.interval_rerank,
     )
     embedding_func.model = model_ref
 

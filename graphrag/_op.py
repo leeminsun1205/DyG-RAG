@@ -73,6 +73,7 @@ class ExtractionConfig:
     ner_batch_size: int = 32
     event_extract_max_gleaning: int = 3
     enable_timestamp_encoding: bool = False
+    enable_interval_events: bool = False
     if_wri_ents: bool = False
     
     # Relationship computation settings
@@ -171,6 +172,77 @@ def normalize_timestamp(timestamp_str: str) -> str:
             return year_match.group(1)
         
         return "static"
+
+def extract_interval_metadata(raw_time: str, sentence: str = "") -> dict:
+    """Return optional interval metadata without changing baseline timestamp logic."""
+    raw_time = raw_time or "static"
+    text_parts = [str(raw_time)]
+    if sentence:
+        text_parts.append(str(sentence))
+    text = " ".join(text_parts)
+    text_norm = text.lower().replace("–", "-").replace("—", "-")
+
+    def _norm(value: str | None) -> str | None:
+        if not value:
+            return None
+        normalized = normalize_timestamp(value)
+        return None if normalized == "static" else normalized
+
+    start_time = None
+    end_time = None
+    time_fuzzy = False
+    time_expression = str(raw_time).strip() if str(raw_time).strip() else "static"
+
+    patterns = [
+        r"(?:from|between)\s+(\d{4}(?:-\d{2}(?:-\d{2})?)?)\s+(?:to|and|through|until|-)\s+(\d{4}(?:-\d{2}(?:-\d{2})?)?)",
+        r"\b(\d{4})\s*-\s*(\d{4})\b",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text_norm)
+        if match:
+            start_time = _norm(match.group(1))
+            end_time = _norm(match.group(2))
+            time_expression = match.group(0)
+            break
+
+    if start_time is None and end_time is None:
+        match = re.search(r"\b(?:since|after)\s+(\d{4}(?:-\d{2}(?:-\d{2})?)?)", text_norm)
+        if match:
+            start_time = _norm(match.group(1))
+            time_expression = match.group(0)
+
+    if start_time is None and end_time is None:
+        match = re.search(r"\b(?:until|before)\s+(\d{4}(?:-\d{2}(?:-\d{2})?)?)", text_norm)
+        if match:
+            end_time = _norm(match.group(1))
+            time_expression = match.group(0)
+
+    if start_time is None and end_time is None:
+        match = re.search(r"\b(early|mid|late)\s+(\d{4})s\b", text_norm)
+        if match:
+            decade = int(match.group(2))
+            bucket = match.group(1)
+            if bucket == "early":
+                start_time, end_time = str(decade), str(decade + 3)
+            elif bucket == "mid":
+                start_time, end_time = str(decade + 4), str(decade + 6)
+            else:
+                start_time, end_time = str(decade + 7), str(decade + 9)
+            time_fuzzy = True
+            time_expression = match.group(0)
+
+    if start_time is None and end_time is None:
+        point_time = _norm(raw_time)
+        if point_time:
+            start_time = point_time
+            end_time = point_time
+
+    return {
+        "start_time": start_time,
+        "end_time": end_time,
+        "time_fuzzy": time_fuzzy,
+        "time_expression": time_expression,
+    }
 
 def calculate_time_distance(timestamp1: str, timestamp2: str) -> Optional[int]:
     """Calculate days between two timestamps. Returns None if either is static."""
@@ -437,6 +509,7 @@ async def extract_events(
         ner_batch_size=global_config.get("ner_batch_size", 32),
         event_extract_max_gleaning=global_config.get("event_extract_max_gleaning", 3),
         enable_timestamp_encoding=global_config.get("enable_timestamp_encoding", False),
+        enable_interval_events=global_config.get("enable_interval_events", False),
         if_wri_ents=global_config.get("if_wri_ents", False),
         event_relationship_batch_size=global_config.get("event_relationship_batch_size", 100),
         event_relationship_max_workers=global_config.get("event_relationship_max_workers", None)
@@ -603,6 +676,8 @@ async def extract_events(
                         "source_id": chunk_key,
                         "entities_involved": []  # Temporarily empty, will be filled later by NER
                     }
+                    if config.enable_interval_events:
+                        event_obj.update(extract_interval_metadata(raw_time, sentence))
                     
                     if event_obj["sentence"]:  # Only add if sentence is not empty
                         maybe_events[event_id].append(event_obj)
@@ -724,6 +799,13 @@ async def extract_events(
                 "context": dp.get("context", ""),
                 "source_id": dp.get("source_id", "")
             }
+            if config.enable_interval_events:
+                events_for_vdb[dp["event_id"]].update({
+                    "start_time": dp.get("start_time", ""),
+                    "end_time": dp.get("end_time", ""),
+                    "time_fuzzy": dp.get("time_fuzzy", False),
+                    "time_expression": dp.get("time_expression", ""),
+                })
         
         try:
             if config.enable_timestamp_encoding:
@@ -786,6 +868,8 @@ async def extract_events(
                 for i, event_data in enumerate(all_events_data, 1):
                     f.write(f"Event #{i}: {event_data.get('event_id', 'unknown_id')}\n")
                     f.write(f"  Timestamp: {event_data.get('timestamp', 'static')}\n")
+                    if config.enable_interval_events:
+                        f.write(f"  Interval: {event_data.get('start_time', '')} -> {event_data.get('end_time', '')} fuzzy={event_data.get('time_fuzzy', False)}\n")
                     f.write(f"  Sentence: {event_data.get('sentence', '')}\n")
                     f.write(f"  Context: {event_data.get('context', '')}\n")
                     f.write(f"  Entities Involved: {event_data.get('entities_involved', [])}\n")
@@ -811,6 +895,12 @@ async def _merge_events_then_upsert(
     already_contexts = []
     already_source_ids = []
     already_entities_involved = []
+    already_start_times = []
+    already_end_times = []
+    already_time_expressions = []
+    already_time_fuzzy = []
+
+    enable_interval_events = global_config.get("enable_interval_events", False)
 
     already_event = await dyg_inst.get_node(event_id)
     if already_event is not None:
@@ -825,6 +915,11 @@ async def _merge_events_then_upsert(
             already_entities_involved.extend(existing_entities)
         elif isinstance(existing_entities, str):
             already_entities_involved.extend(existing_entities.split(",") if existing_entities else [])
+        if enable_interval_events:
+            already_start_times.append(already_event.get("start_time") or "")
+            already_end_times.append(already_event.get("end_time") or "")
+            already_time_expressions.append(already_event.get("time_expression") or "")
+            already_time_fuzzy.append(bool(already_event.get("time_fuzzy", False)))
 
     timestamps = [(dp.get("timestamp") or "") for dp in events_data] + already_timestamps
     timestamp = sorted(Counter(timestamps).items(), key=lambda x: x[1], reverse=True)[0][0] if timestamps else ""
@@ -849,6 +944,23 @@ async def _merge_events_then_upsert(
     source_id = GRAPH_FIELD_SEP.join(
         set([dp.get("source_id", "") for dp in events_data] + already_source_ids)
     )
+
+    interval_data = {}
+    if enable_interval_events:
+        start_times = [(dp.get("start_time") or "") for dp in events_data] + already_start_times
+        end_times = [(dp.get("end_time") or "") for dp in events_data] + already_end_times
+        time_expressions = [(dp.get("time_expression") or "") for dp in events_data] + already_time_expressions
+        time_fuzzy_values = [bool(dp.get("time_fuzzy", False)) for dp in events_data] + already_time_fuzzy
+
+        start_time = sorted(Counter([t for t in start_times if t]).items(), key=lambda x: x[1], reverse=True)[0][0] if any(start_times) else ""
+        end_time = sorted(Counter([t for t in end_times if t]).items(), key=lambda x: x[1], reverse=True)[0][0] if any(end_times) else ""
+        time_expression = max([t for t in time_expressions if t], key=len) if any(time_expressions) else ""
+        interval_data = {
+            "start_time": start_time,
+            "end_time": end_time,
+            "time_fuzzy": any(time_fuzzy_values),
+            "time_expression": time_expression,
+        }
     
     event_data = dict(
         timestamp=timestamp,
@@ -858,6 +970,7 @@ async def _merge_events_then_upsert(
         entities_involved=entities_involved,
         participants="",
         location="",
+        **interval_data,
     )
     
     await dyg_inst.upsert_node(

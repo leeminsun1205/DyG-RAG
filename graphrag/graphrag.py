@@ -14,6 +14,7 @@ import networkx as nx
 import copy
 import random
 import math
+import calendar
 from collections import Counter, defaultdict
 from pathlib import Path
 from datetime import datetime
@@ -190,6 +191,9 @@ class GraphRAG:
     # Dynamic query timeline events parameter  
     if_timeline_events: bool = True  # Whether to include timeline events in dynamic query (default: True, set to False for ablation study)
     enable_version_cot: bool = False  # (ours) prepend a conflict-aware version timeline to the answer context; default False = baseline unchanged
+    enable_interval_events: bool = False  # Store optional start/end interval metadata on events; default False = baseline unchanged
+    enable_interval_rerank: bool = False  # Use interval/query-window relevance during seed reranking; default False = baseline unchanged
+    interval_rerank_weight: float = 0.2  # Blend weight for interval relevance when interval rerank is enabled
 
     random_seed: int = 42  # Default random seed
 
@@ -288,7 +292,16 @@ class GraphRAG:
                 namespace="events",
                 global_config=config_dict,
                 embedding_func=self.embedding_func,
-                meta_fields={"event_id", "timestamp", "sentence"},
+                meta_fields={
+                    "event_id",
+                    "timestamp",
+                    "sentence",
+                    *(
+                        {"start_time", "end_time", "time_fuzzy", "time_expression"}
+                        if self.enable_interval_events
+                        else set()
+                    ),
+                },
             )
         )
         
@@ -713,21 +726,27 @@ class GraphRAG:
                     for i, event_data in enumerate(events_data):
                         if event_data is not None:
                             event_id = graph_traversed_event_ids[i]
-                            final_results.append(
-                                {
-                                    "id": event_id,
-                                    "timestamp": event_data.get("timestamp", "unknown"),
-                                    "sentence": event_data.get("sentence", ""),
-                                    "context": event_data.get("context", ""),
-                                    "entities_involved": event_data.get(
-                                        "entities_involved", []
-                                    ),
-                                    "source_id": event_data.get(
-                                        "source_id", ""
-                                    ),  # This should now be available
-                                    "distance": 0.0,  # No distance in graph retrieval
-                                }
-                            )
+                            result_event = {
+                                "id": event_id,
+                                "timestamp": event_data.get("timestamp", "unknown"),
+                                "sentence": event_data.get("sentence", ""),
+                                "context": event_data.get("context", ""),
+                                "entities_involved": event_data.get(
+                                    "entities_involved", []
+                                ),
+                                "source_id": event_data.get(
+                                    "source_id", ""
+                                ),  # This should now be available
+                                "distance": 0.0,  # No distance in graph retrieval
+                            }
+                            if self.enable_interval_events:
+                                result_event.update({
+                                    "start_time": event_data.get("start_time", ""),
+                                    "end_time": event_data.get("end_time", ""),
+                                    "time_fuzzy": event_data.get("time_fuzzy", False),
+                                    "time_expression": event_data.get("time_expression", ""),
+                                })
+                            final_results.append(result_event)
 
                     logger.info(
                         f"Retrieved {len(final_results)} complete events from event_dynamic_graph"
@@ -1277,6 +1296,80 @@ class GraphRAG:
         
         return False
 
+    def _parse_time_bound(self, value: str, is_end: bool = False) -> Optional[int]:
+        if not value or value == "static" or value == "unknown":
+            return None
+        value = str(value).strip()
+        try:
+            if len(value) == 4 and value.isdigit():
+                year = int(value)
+                if is_end:
+                    return datetime(year, 12, 31).toordinal()
+                return datetime(year, 1, 1).toordinal()
+            if len(value) == 7:
+                year, month = [int(x) for x in value.split("-")]
+                if is_end:
+                    day = calendar.monthrange(year, month)[1]
+                    return datetime(year, month, day).toordinal()
+                return datetime(year, month, 1).toordinal()
+            if len(value) == 10:
+                year, month, day = [int(x) for x in value.split("-")]
+                return datetime(year, month, day).toordinal()
+        except Exception:
+            return None
+        return None
+
+    def _event_interval_bounds(self, event: Dict) -> tuple[Optional[int], Optional[int]]:
+        start = event.get("start_time") or event.get("timestamp")
+        end = event.get("end_time") or event.get("timestamp")
+        return self._parse_time_bound(start, is_end=False), self._parse_time_bound(end, is_end=True)
+
+    def _query_interval_bounds(self, time_constraints: Dict) -> tuple[Optional[int], Optional[int]]:
+        if not time_constraints:
+            return None, None
+        start = time_constraints.get("start_time")
+        end = time_constraints.get("end_time")
+        q_start = self._parse_time_bound(start, is_end=False) if start else None
+        q_end = self._parse_time_bound(end, is_end=True) if end else None
+        if q_start is None and q_end is not None:
+            q_start = q_end
+        if q_end is None and q_start is not None:
+            q_end = q_start
+        if q_start is not None and q_end is not None and q_start > q_end:
+            q_start, q_end = q_end, q_start
+        return q_start, q_end
+
+    def calculate_interval_relevance_score(self, event: Dict, time_constraints: Dict) -> float:
+        q_start, q_end = self._query_interval_bounds(time_constraints)
+        if q_start is None or q_end is None:
+            return 0.5
+
+        e_start, e_end = self._event_interval_bounds(event)
+        if e_start is None and e_end is None:
+            return 0.0
+        if e_start is None:
+            e_start = e_end
+        if e_end is None:
+            e_end = e_start
+        if e_start is None or e_end is None:
+            return 0.0
+        if e_start > e_end:
+            e_start, e_end = e_end, e_start
+
+        if e_start <= q_end and q_start <= e_end:
+            score = 1.0
+        else:
+            distance_days = q_start - e_end if e_end < q_start else e_start - q_end
+            score = 1.0 / (1.0 + max(0, distance_days) / 365.0)
+
+        if event.get("time_fuzzy"):
+            score *= 0.9
+        return max(0.0, min(1.0, score))
+
+    def _blend_interval_score(self, base_score: float, interval_score: float) -> float:
+        weight = max(0.0, min(1.0, getattr(self, "interval_rerank_weight", 0.2)))
+        return base_score * (1.0 - weight) + interval_score * weight
+
     async def rerank_with_bm25(self, events: List[Dict], query: str, 
                              entities: List[str], time_constraints: Dict) -> List[Dict]:
         if not events or not self.enable_bm25_reranking:
@@ -1305,13 +1398,25 @@ class GraphRAG:
                 event.get('sentence', '') or event.get('content', ''), entities
             )
             
-            composite_score = (
+            base_score = (
                 bm25_score * self.bm25_weight +
                 entity_score * self.entity_match_weight
+            )
+            interval_score = (
+                self.calculate_interval_relevance_score(event, time_constraints)
+                if self.enable_interval_rerank
+                else None
+            )
+            composite_score = (
+                self._blend_interval_score(base_score, interval_score)
+                if interval_score is not None
+                else base_score
             )
             
             event['_bm25_score'] = bm25_score
             event['_entity_score'] = entity_score
+            if interval_score is not None:
+                event['_interval_score'] = interval_score
             event['_composite_score'] = composite_score
             
             scored_events.append(event)
@@ -1320,6 +1425,8 @@ class GraphRAG:
                                key=lambda x: x['_composite_score'], 
                                reverse=True)
         
+        if self.enable_interval_rerank:
+            logger.info("BM25 reranking included interval relevance scores")
         logger.info(f"BM25 reranking completed")
         
         return reranked_events
@@ -1443,13 +1550,25 @@ class GraphRAG:
                 event.get('sentence', '') or event.get('content', ''), entities
             )
             
-            composite_score = (
+            base_score = (
                 cross_encoder_score * self.ce_weight +
                 entity_score * self.ce_ent_weight
+            )
+            interval_score = (
+                self.calculate_interval_relevance_score(event, time_constraints)
+                if self.enable_interval_rerank
+                else None
+            )
+            composite_score = (
+                self._blend_interval_score(base_score, interval_score)
+                if interval_score is not None
+                else base_score
             )
             
             event['_cross_encoder_score'] = cross_encoder_score
             event['_entity_score'] = entity_score
+            if interval_score is not None:
+                event['_interval_score'] = interval_score
             event['_composite_score'] = composite_score
             
             scored_events.append(event)
@@ -1458,6 +1577,8 @@ class GraphRAG:
                                key=lambda x: x['_composite_score'], 
                                reverse=True)
         
+        if self.enable_interval_rerank:
+            logger.info("Cross-encoder reranking included interval relevance scores")
         logger.info(f"Optimized cross-encoder reranking completed")
         
         return reranked_events
