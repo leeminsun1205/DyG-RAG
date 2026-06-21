@@ -433,6 +433,8 @@ def parse_args():
     p.add_argument("--results_file", default=None, help="override output JSON path")
     p.add_argument("--version-cot", dest="version_cot", action="store_true",
                    help="(ours) enable conflict-aware version timeline in the answer context; default off = baseline")
+    p.add_argument("--version-cot-seeds", dest="version_cot_seeds", action="store_true",
+                   help="(ours) let Version-CoT also read reranked seed events; implies --version-cot")
     p.add_argument("--interval-events", dest="interval_events", action="store_true",
                    help="(ours) store rule-based start/end interval metadata on events; default off = baseline")
     p.add_argument("--interval-rerank", dest="interval_rerank", action="store_true",
@@ -442,6 +444,9 @@ def parse_args():
 def main():
     args = parse_args()
     label = DATASETS[args.dataset]
+    if args.version_cot_seeds and not args.version_cot:
+        logger.warning("--version-cot-seeds requires Version-CoT; enabling --version-cot for this run")
+        args.version_cot = True
     if args.interval_rerank and not args.interval_events:
         logger.warning("--interval-rerank requires interval metadata; enabling --interval-events for this run")
         args.interval_events = True
@@ -451,7 +456,9 @@ def main():
     corpus_file = Path(f"datasets/{label}/Corpus.json")
     questions_file = Path(f"datasets/{label}/Question.json")
     suffixes = []
-    if args.version_cot:
+    if args.version_cot_seeds:
+        suffixes.append("vcot-seeds")
+    elif args.version_cot:
         suffixes.append("vcot")
     if args.interval_events:
         suffixes.append("interval-events")
@@ -469,6 +476,7 @@ def main():
     print(f"   Working dir    : {work_dir}")
     print(f"   Results file   : {results_file}")
     print(f"   Version-CoT    : {'ON (ours)' if args.version_cot else 'OFF (baseline)'}")
+    print(f"   Version-CoT seeds: {'ON (ours)' if args.version_cot_seeds else 'OFF (baseline)'}")
     print(f"   Interval events: {'ON (ours)' if args.interval_events else 'OFF (baseline)'}")
     print(f"   Interval rerank: {'ON (ours)' if args.interval_rerank else 'OFF (baseline)'}")
 
@@ -489,6 +497,7 @@ def main():
         ce_model="cross-encoder/ms-marco-TinyBERT-L-2-v2",
         ner_model_name="dslim_bert_base_ner",
         enable_version_cot=args.version_cot,
+        enable_version_cot_seed_events=args.version_cot_seeds,
         enable_interval_events=args.interval_events,
         enable_interval_rerank=args.interval_rerank,
     )

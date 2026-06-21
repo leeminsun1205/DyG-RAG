@@ -37,8 +37,20 @@ Implemented today:
 - Kaggle-compatible dependency path: `requirements-kaggle.txt`. Do not assume full `requirements.txt` is safe on Kaggle.
 - Conflict-aware Version-CoT: `graphrag/versioning.py`, `GraphRAG.enable_version_cot=False`, and `reproduce/run.py --version-cot`. Default off means baseline behavior should remain unchanged. When on, it makes one extra LLM call over retrieved events, extracts transient `(subject, attribute, value, validity interval)` facts, renders version timelines, and prepends them to the answer context. Output files are suffixed `_vcot`.
 - Version-CoT v1 is query-time and additive: it highlights the row valid at the asked time but should not narrow away otherwise useful answer details. It marks `superseded` for single-valued conflicts; currently only `spouse` is treated single-valued. Concurrent positions/employers/etc. are multi-valued.
+- Version-CoT seed expansion: `GraphRAG.enable_version_cot_seed_events=False` and `reproduce/run.py --version-cot-seeds`. Default off means both baseline and `--version-cot` v1 stay unchanged. When on, Version-CoT reads the union of graph-traversed events plus reranked seed events, deduplicated by event ID/sentence. This changes only the Version-CoT context input, not seed selection, traversal, source chunk retrieval, or evaluation. It implies `--version-cot` in the runner and output files are suffixed `_vcot-seeds`.
 - Interval event metadata: `GraphRAG.enable_interval_events=False` and `reproduce/run.py --interval-events`. Default off means baseline behavior should remain unchanged. When on, extraction stores rule-based `start_time`, `end_time`, `time_fuzzy`, and `time_expression` fields on event nodes/vector metadata while preserving the original `timestamp` and event IDs. Output files are suffixed `_interval-events`. This is schema groundwork for interval-aware retrieval.
 - Interval-aware reranking: `GraphRAG.enable_interval_rerank=False` and `reproduce/run.py --interval-rerank`. Default off means baseline behavior should remain unchanged. When on, seed reranking blends the existing cross-encoder/BM25+entity score with query-window interval relevance using `interval_rerank_weight` (default 0.2). It adds no LLM calls and implies `--interval-events` in the runner. Output files are suffixed `_interval-rerank`.
+
+Recent full ComplexTR ablation with `gemini-2.5-flash-lite`:
+
+| Run | Accuracy | Recall | Notes |
+|---|---:|---:|---|
+| baseline | 72.04 | 82.28 | no feature flags |
+| `--version-cot` | 74.47 | 83.96 | best current run; main gain source |
+| `--interval-rerank` | 72.04 | 82.49 | negligible accuracy gain, slight recall gain |
+| `--version-cot --interval-rerank` | 73.25 | 83.48 | worse than Version-CoT alone; do not assume feature stacking helps |
+
+Treat `--interval-rerank` as experimental. Do not recommend it as the default best setting unless later ablations overturn this result. `--version-cot-seeds` is newly implemented and still needs ablation results before being treated as a default recommendation.
 
 Not implemented yet:
 
@@ -155,6 +167,7 @@ Key config defaults:
 | `enable_timestamp_encoding` / `timestamp_dim` | True / 16 | Fourier timestamp encoding |
 | `event_extract_max_gleaning` | 1 | extra extraction pass count |
 | `enable_version_cot` | False | optional Version-CoT; off = baseline |
+| `enable_version_cot_seed_events` | False | optional seed-event expansion for Version-CoT; off = Version-CoT v1 |
 | `enable_interval_events` | False | optional rule-based interval metadata on events; off = baseline |
 | `enable_interval_rerank` / `interval_rerank_weight` | False / 0.2 | optional query-window interval relevance blended into seed reranking |
 

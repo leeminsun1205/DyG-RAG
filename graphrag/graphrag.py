@@ -191,6 +191,7 @@ class GraphRAG:
     # Dynamic query timeline events parameter  
     if_timeline_events: bool = True  # Whether to include timeline events in dynamic query (default: True, set to False for ablation study)
     enable_version_cot: bool = False  # (ours) prepend a conflict-aware version timeline to the answer context; default False = baseline unchanged
+    enable_version_cot_seed_events: bool = False  # Let Version-CoT also read reranked seed events; default False = baseline/version-cot v1 unchanged
     enable_interval_events: bool = False  # Store optional start/end interval metadata on events; default False = baseline unchanged
     enable_interval_rerank: bool = False  # Use interval/query-window relevance during seed reranking; default False = baseline unchanged
     interval_rerank_weight: float = 0.2  # Blend weight for interval relevance when interval rerank is enabled
@@ -832,13 +833,24 @@ class GraphRAG:
                 logger.info("Timeline events disabled for ablation study - skipping events section construction")
 
             # (ours) conflict-aware version timeline — flag-gated, baseline untouched when off
-            if self.enable_version_cot and final_results and self.if_timeline_events:
+            if self.enable_version_cot and self.if_timeline_events:
                 try:
                     from .versioning import build_version_section
-                    version_section = await build_version_section(final_results, self.best_model_func, time_constraints)
-                    if version_section:
-                        events_section = version_section + "\n\n" + events_section
-                        logger.info("version-cot: prepended version timeline to events section")
+                    version_events = final_results
+                    if self.enable_version_cot_seed_events:
+                        version_events = self._merge_version_cot_events(final_results, top_k_seed_events)
+                        logger.info(
+                            "version-cot-seeds: using %s graph events + %s seed events -> %s unique Version-CoT events",
+                            len(final_results),
+                            len(top_k_seed_events),
+                            len(version_events),
+                        )
+
+                    if version_events:
+                        version_section = await build_version_section(version_events, self.best_model_func, time_constraints)
+                        if version_section:
+                            events_section = version_section + "\n\n" + events_section
+                            logger.info("version-cot: prepended version timeline to events section")
                 except Exception as e:
                     logger.error(f"version-cot failed (continuing with baseline context): {e}")
 
@@ -1021,6 +1033,22 @@ class GraphRAG:
             context_parts.append(event_text)
 
         return "\n".join(context_parts)
+
+    def _merge_version_cot_events(self, final_results, seed_events):
+        """Deduplicate graph results and seed candidates for Version-CoT only."""
+        merged = []
+        seen = set()
+
+        for event in list(final_results or []) + list(seed_events or []):
+            if not event or not event.get("sentence"):
+                continue
+            key = event.get("id") or event.get("event_id") or event.get("sentence")
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(event)
+
+        return merged
 
     def __deepcopy__(self, memo):
         cls = self.__class__
