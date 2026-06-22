@@ -43,6 +43,7 @@ Implemented today:
 - Allen edge metadata: `GraphRAG.enable_allen_edges=False` and `reproduce/run.py --allen-edges`. Default off means baseline behavior should remain unchanged. When on, graph construction stores Allen interval relation metadata (`allen_relation`, inverse relation, canonical endpoint IDs, gap/overlap days) on event graph edges without changing edge scoring, traversal, prompts, or evaluation. It implies `--interval-events` in the runner and output files are suffixed `_allen-edges`. This is schema groundwork for Allen-guided traversal.
 - Allen-guided traversal: `GraphRAG.enable_allen_traversal=False` and `reproduce/run.py --allen-traversal`. Default off means baseline behavior should remain unchanged. When on, random-walk graph traversal keeps the existing edge topology but biases edge weights using Allen relation metadata and neighbor interval relevance to the parsed query time. It implies `--allen-edges` and `--interval-events` in the runner and output files are suffixed `_allen-traversal`.
 - Query-time normalization: `GraphRAG.enable_query_time_normalization=False` and `reproduce/run.py --normalize-query-time`. Default off means baseline behavior should remain unchanged. When on, query parsing applies a deterministic rule after LLM time/entity extraction for explicit offset patterns such as `25 years and 1 months before January 1944`, replacing `time_constraints` with the computed target month/date. It adds no LLM calls and output files are suffixed `_normalize-query-time`.
+- Hybrid BM25 seed retrieval: `GraphRAG.enable_hybrid_seed_retrieval=False` and `reproduce/run.py --hybrid-seed-retrieval`. Default off means baseline behavior should remain unchanged. When on, BM25 independently retrieves event candidates from graph nodes, fuses them with dense/time-aware vector candidates using temporal-aware Reciprocal Rank Fusion, then passes the fused candidates through the existing seed reranking and graph traversal. Output files are suffixed `_hybrid-bm25`.
 
 Recent full ComplexTR ablation with `gemini-2.5-flash-lite`:
 
@@ -50,10 +51,13 @@ Recent full ComplexTR ablation with `gemini-2.5-flash-lite`:
 |---|---:|---:|---|
 | baseline | 72.04 | 82.28 | no feature flags |
 | `--version-cot` | 74.47 | 83.96 | best current run; main gain source |
+| `--normalize-query-time` | 73.56 | 83.59 | deterministic offset-date normalization; first non-Version-CoT feature with clear gain |
 | `--interval-rerank` | 72.04 | 82.49 | negligible accuracy gain, slight recall gain |
 | `--version-cot --interval-rerank` | 73.25 | 83.48 | worse than Version-CoT alone; do not assume feature stacking helps |
+| `--version-cot-seeds` | 71.73 | 82.68 | worse than baseline accuracy; seed expansion likely adds noise |
+| `--allen-traversal` | 69.60 | 80.19 | negative ablation; soft Allen traversal bias causes retrieval drift |
 
-Treat `--interval-rerank` as experimental. Do not recommend it as the default best setting unless later ablations overturn this result. `--version-cot-seeds` is newly implemented and still needs ablation results before being treated as a default recommendation.
+Treat `--interval-rerank`, `--version-cot-seeds`, and `--allen-traversal` as experimental/negative unless later ablations overturn these results. `--normalize-query-time` is promising and should next be tested stacked with `--version-cot`; do not assume the stack helps until measured.
 
 Not implemented yet:
 

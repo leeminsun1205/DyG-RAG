@@ -124,6 +124,12 @@ class GraphRAG:
     bm25_b: float = 0.75  # BM25 b parameter (length normalization)
     bm25_weight: float = 0.7  # Weight of BM25 score in composite ranking
     entity_match_weight: float = 0.3  # Weight of entity matching in composite ranking
+    enable_hybrid_seed_retrieval: bool = False  # Add independent BM25 candidates before seed reranking; default False = baseline unchanged
+    hybrid_bm25_top_k: int = 500  # Number of lexical event candidates to add before fusion
+    hybrid_rrf_k: int = 60  # Reciprocal Rank Fusion smoothing constant
+    hybrid_dense_weight: float = 1.0  # Dense/time-aware retrieval contribution in RRF
+    hybrid_bm25_weight: float = 0.7  # Lexical retrieval contribution in RRF
+    hybrid_temporal_weight: float = 0.5  # Temporal gate strength for RRF candidates
 
     # Cross-encoder Reranking (a more powerful neural method)
     enable_ce_rerank: bool = True  # Whether to enable cross-encoder reranking (alternative to BM25)
@@ -659,6 +665,14 @@ class GraphRAG:
                 found_results = regular_results
                 # logger.info(f"Found {len(found_results)} events using regular query")
         
+        if self.enable_hybrid_seed_retrieval:
+            found_results = await self.hybrid_seed_retrieval(
+                dense_results=found_results,
+                query=query,
+                time_constraints=time_constraints,
+                top_k=topk1,
+            )
+
         top_k_seed_events = []
         if found_results:
             logger.info(f"Starting cross-encoder filtering to select top_{et_top_k} seed events from {len(found_results)} candidates")
@@ -1466,6 +1480,151 @@ class GraphRAG:
     def _blend_interval_score(self, base_score: float, interval_score: float) -> float:
         weight = max(0.0, min(1.0, getattr(self, "interval_rerank_weight", 0.2)))
         return base_score * (1.0 - weight) + interval_score * weight
+
+    def _event_text_for_lexical_retrieval(self, event: Dict) -> str:
+        parts = [
+            event.get("sentence", ""),
+            event.get("context", ""),
+            event.get("timestamp", ""),
+            event.get("time_expression", ""),
+        ]
+        entities = event.get("entities_involved", [])
+        if isinstance(entities, list):
+            parts.extend(str(entity) for entity in entities)
+        elif entities:
+            parts.append(str(entities))
+        return " ".join(str(part).strip() for part in parts if part)
+
+    def _event_result_id(self, event: Dict) -> Optional[str]:
+        return event.get("id") or event.get("event_id") or event.get("__id__")
+
+    async def bm25_retrieve_events(self, query: str, top_k: Optional[int] = None) -> List[Dict]:
+        if not self.event_dynamic_graph:
+            return []
+
+        all_nodes = await self.event_dynamic_graph.get_all_nodes()
+        if not all_nodes:
+            return []
+
+        events = []
+        corpus = []
+        for event_id, event_data in all_nodes.items():
+            if not isinstance(event_data, dict):
+                continue
+            lexical_text = self._event_text_for_lexical_retrieval(event_data)
+            if not lexical_text.strip():
+                continue
+            event = {
+                "id": event_id,
+                "event_id": event_id,
+                "content": lexical_text,
+                "timestamp": event_data.get("timestamp", "static"),
+                "sentence": event_data.get("sentence", ""),
+                "context": event_data.get("context", ""),
+                "entities_involved": event_data.get("entities_involved", []),
+                "source_id": event_data.get("source_id", ""),
+                "distance": 1.0,
+            }
+            if self.enable_interval_events:
+                event.update({
+                    "start_time": event_data.get("start_time", ""),
+                    "end_time": event_data.get("end_time", ""),
+                    "time_fuzzy": event_data.get("time_fuzzy", False),
+                    "time_expression": event_data.get("time_expression", ""),
+                })
+            events.append(event)
+            corpus.append(self.tokenize_text(lexical_text))
+
+        if not events:
+            return []
+
+        bm25_scores = self.calculate_bm25_scores(
+            query=query,
+            corpus=corpus,
+            k1=self.bm25_k1,
+            b=self.bm25_b,
+        )
+        scored_events = []
+        for idx, event in enumerate(events):
+            score = bm25_scores[idx] if idx < len(bm25_scores) else 0.0
+            event["_bm25_retrieval_score"] = score
+            scored_events.append(event)
+
+        scored_events.sort(key=lambda item: item.get("_bm25_retrieval_score", 0.0), reverse=True)
+        limit = top_k or self.hybrid_bm25_top_k
+        return scored_events[:limit]
+
+    async def hybrid_seed_retrieval(
+        self,
+        dense_results: List[Dict],
+        query: str,
+        time_constraints: Dict,
+        top_k: int,
+    ) -> List[Dict]:
+        bm25_top_k = max(1, int(getattr(self, "hybrid_bm25_top_k", 500)))
+        sparse_results = await self.bm25_retrieve_events(query=query, top_k=bm25_top_k)
+
+        if not sparse_results:
+            logger.info("Hybrid seed retrieval found no BM25 candidates; using dense candidates only")
+            return dense_results
+
+        dense_ranks = {
+            self._event_result_id(event): rank
+            for rank, event in enumerate(dense_results or [], start=1)
+            if self._event_result_id(event)
+        }
+        sparse_ranks = {
+            self._event_result_id(event): rank
+            for rank, event in enumerate(sparse_results, start=1)
+            if self._event_result_id(event)
+        }
+
+        candidates: Dict[str, Dict] = {}
+        for event in sparse_results + (dense_results or []):
+            event_id = self._event_result_id(event)
+            if not event_id:
+                continue
+            if event_id not in candidates:
+                candidates[event_id] = dict(event)
+            else:
+                candidates[event_id].update({k: v for k, v in event.items() if v not in (None, "", [])})
+                candidates[event_id]["id"] = event_id
+
+        rrf_k = max(1, int(getattr(self, "hybrid_rrf_k", 60)))
+        dense_weight = float(getattr(self, "hybrid_dense_weight", 1.0))
+        bm25_weight = float(getattr(self, "hybrid_bm25_weight", 0.7))
+        temporal_weight = max(0.0, min(1.0, float(getattr(self, "hybrid_temporal_weight", 0.5))))
+
+        fused_candidates = []
+        for event_id, event in candidates.items():
+            dense_rank = dense_ranks.get(event_id)
+            sparse_rank = sparse_ranks.get(event_id)
+            rrf_score = 0.0
+            if dense_rank is not None:
+                rrf_score += dense_weight / (rrf_k + dense_rank)
+            if sparse_rank is not None:
+                rrf_score += bm25_weight / (rrf_k + sparse_rank)
+
+            temporal_score = self.calculate_interval_relevance_score(event, time_constraints)
+            temporal_gate = (1.0 - temporal_weight) + temporal_weight * temporal_score
+            final_score = rrf_score * temporal_gate
+
+            event["_dense_rank"] = dense_rank
+            event["_bm25_rank"] = sparse_rank
+            event["_rrf_score"] = rrf_score
+            event["_temporal_score"] = temporal_score
+            event["_hybrid_score"] = final_score
+            fused_candidates.append(event)
+
+        fused_candidates.sort(key=lambda item: item.get("_hybrid_score", 0.0), reverse=True)
+        limit = max(top_k, len(dense_results or []))
+        logger.info(
+            "Hybrid seed retrieval fused %s dense + %s BM25 candidates -> %s unique candidates",
+            len(dense_results or []),
+            len(sparse_results),
+            len(fused_candidates),
+        )
+        return fused_candidates[:limit]
 
     async def rerank_with_bm25(self, events: List[Dict], query: str, 
                              entities: List[str], time_constraints: Dict) -> List[Dict]:

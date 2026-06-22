@@ -445,6 +445,18 @@ def parse_args():
                    help="(ours) normalize explicit date-offset query times such as '25 years before January 1944'; default off = baseline")
     p.add_argument("--interval-rerank", dest="interval_rerank", action="store_true",
                    help="(ours) blend query-window interval relevance into seed reranking; implies --interval-events")
+    p.add_argument("--hybrid-seed-retrieval", dest="hybrid_seed_retrieval", action="store_true",
+                   help="(ours) add independent BM25 event candidates and fuse them with dense retrieval using temporal-aware RRF")
+    p.add_argument("--hybrid-bm25-topk", dest="hybrid_bm25_topk", type=int, default=500,
+                   help="number of BM25 event candidates to add when --hybrid-seed-retrieval is enabled")
+    p.add_argument("--hybrid-dense-weight", dest="hybrid_dense_weight", type=float, default=1.0,
+                   help="dense/time-aware retrieval weight in hybrid RRF")
+    p.add_argument("--hybrid-bm25-weight", dest="hybrid_bm25_weight", type=float, default=0.7,
+                   help="BM25 lexical retrieval weight in hybrid RRF")
+    p.add_argument("--hybrid-temporal-weight", dest="hybrid_temporal_weight", type=float, default=0.5,
+                   help="temporal gate strength for hybrid RRF, clamped to [0, 1]")
+    p.add_argument("--hybrid-rrf-k", dest="hybrid_rrf_k", type=int, default=60,
+                   help="Reciprocal Rank Fusion smoothing constant for hybrid retrieval")
     return p.parse_args()
 
 def main():
@@ -482,6 +494,8 @@ def main():
         suffixes.append("normalize-query-time")
     if args.interval_rerank:
         suffixes.append("interval-rerank")
+    if args.hybrid_seed_retrieval:
+        suffixes.append("hybrid-bm25")
     feature_suffix = ("_" + "_".join(suffixes)) if suffixes else ""
     results_file = (Path(args.results_file) if args.results_file
                     else Path(f"results_{args.dataset}_mode-{args.mode}_topk-{args.top_k}{feature_suffix}.json"))
@@ -500,6 +514,9 @@ def main():
     print(f"   Allen traversal: {'ON (ours)' if args.allen_traversal else 'OFF (baseline)'}")
     print(f"   Query time norm: {'ON (ours)' if args.normalize_query_time else 'OFF (baseline)'}")
     print(f"   Interval rerank: {'ON (ours)' if args.interval_rerank else 'OFF (baseline)'}")
+    print(f"   Hybrid BM25    : {'ON (ours)' if args.hybrid_seed_retrieval else 'OFF (baseline)'}")
+    if args.hybrid_seed_retrieval:
+        print(f"   Hybrid weights : dense={args.hybrid_dense_weight}, bm25={args.hybrid_bm25_weight}, temporal={args.hybrid_temporal_weight}, rrf_k={args.hybrid_rrf_k}")
 
     # --- DyG-RAG initialization ---
     embedding_func = get_bge_embedding_func()
@@ -524,6 +541,12 @@ def main():
         enable_allen_traversal=args.allen_traversal,
         enable_query_time_normalization=args.normalize_query_time,
         enable_interval_rerank=args.interval_rerank,
+        enable_hybrid_seed_retrieval=args.hybrid_seed_retrieval,
+        hybrid_bm25_top_k=args.hybrid_bm25_topk,
+        hybrid_dense_weight=args.hybrid_dense_weight,
+        hybrid_bm25_weight=args.hybrid_bm25_weight,
+        hybrid_temporal_weight=args.hybrid_temporal_weight,
+        hybrid_rrf_k=args.hybrid_rrf_k,
     )
     embedding_func.model = model_ref
 
